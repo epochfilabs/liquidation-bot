@@ -1,0 +1,19 @@
+{
+  "name": "liquidation-bot-ts-reference",
+  "version": "0.1.0",
+  "private": true,
+  "description": "TypeScript reference implementation for cross-validating Rust health calculations",
+  "scripts": {
+    "validate": "npx ts-node validate-health.ts",
+    "snapshot": "npx ts-node snapshot-obligations.ts"
+  },
+  "dependencies": {
+    "@kamino-finance/klend-sdk": "^7.3.22",
+    "@solana/web3.js": "^1.95.0",
+    "decimal.js": "^10.4.3"
+  },
+  "devDependencies": {
+    "ts-node": "^10.9.2",
+    "typescript": "^5.5.0"
+  }
+}

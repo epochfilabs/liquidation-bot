@@ -1,0 +1,10 @@
+/target
+tests/surfpool-tests/target
+tests/forged_accounts/
+test-ledger/
+.surfpool/
+liquidator-keypair.json
+ts-reference/node_modules/
+ts-reference/dist/
+.env
+*.json.bak

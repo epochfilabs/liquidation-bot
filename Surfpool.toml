@@ -1,0 +1,40 @@
+[simnet]
+# Use our Triton RPC as datasource for forking mainnet
+rpc_url = "${SOLANA_RPC_URL}"
+
+# Kamino Lend accounts to pre-fork
+# Main market
+[[accounts]]
+address = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
+
+# Klend program
+[[accounts]]
+address = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
+
+# Jupiter Lend Vaults program
+[[accounts]]
+address = "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi"
+
+# Jupiter Lend Flash Loan program
+[[accounts]]
+address = "jupgfSgfuAXv4B6R2Uxu85Z1qdzgju79s6MfZekN6XS"
+
+# Save (Solend) program
+[[accounts]]
+address = "SLendK7ySfcEzyaFqy93gDnD3RtrpXJcnRwb6zFHJSh"
+
+# MarginFi program
+[[accounts]]
+address = "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"
+
+# SPL Token program
+[[accounts]]
+address = "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA"
+
+# ATA program
+[[accounts]]
+address = "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL"
+
+# Sysvar Instructions
+[[accounts]]
+address = "Sysvar1nstructions1111111111111111111111111"

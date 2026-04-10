@@ -1,0 +1,22 @@
+# Liquidation Bot Configuration
+
+# Solana RPC endpoint
+rpc_url = "https://api.mainnet-beta.solana.com"
+
+# Yellowstone gRPC endpoint (Helius / Triton)
+grpc_url = "https://grpc.helius.xyz"
+
+# gRPC auth token
+grpc_token = "YOUR_TOKEN_HERE"
+
+# Kamino Lend market address
+kamino_market = "7u3HeHxYDLhnCoErrtycNokbQYbWGzLs6JSDqGAv5PfF"
+
+# Kamino Lend program ID
+klend_program_id = "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
+
+# Path to liquidator wallet keypair
+liquidator_keypair_path = "./liquidator-keypair.json"
+
+# Minimum profit in lamports to trigger a liquidation
+min_profit_lamports = 10000
