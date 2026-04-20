@@ -1,0 +1,19 @@
+[package]
+name = "save-decoder"
+version = "0.1.0"
+edition = "2021"
+description = "Save (Solend) instruction decoder for the liquidation indexer. Hand-written — Save uses SPL token-lending Borsh encoding, not Anchor."
+
+[dependencies]
+borsh = { workspace = true }
+solana-sdk = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bs58 = { workspace = true }
+thiserror = { workspace = true }
+
+[dev-dependencies]
+base64 = { workspace = true }
+anyhow = { workspace = true }
+bs58 = { workspace = true }
+serde_json = { workspace = true }

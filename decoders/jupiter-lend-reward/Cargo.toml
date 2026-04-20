@@ -1,0 +1,9 @@
+[package]
+name = "jupiter-lend-reward-decoder"
+version = "0.1.0"
+edition = "2021"
+description = "Jupiter Lend reward program decoder stub. CPI decoding for liquidation indexer."
+
+[dependencies]
+solana-sdk = { workspace = true }
+thiserror = { workspace = true }

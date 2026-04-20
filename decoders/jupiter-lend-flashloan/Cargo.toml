@@ -1,0 +1,9 @@
+[package]
+name = "jupiter-lend-flashloan-decoder"
+version = "0.1.0"
+edition = "2021"
+description = "Jupiter Lend flashloan program decoder stub. CPI decoding for liquidation indexer."
+
+[dependencies]
+solana-sdk = { workspace = true }
+thiserror = { workspace = true }

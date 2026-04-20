@@ -1,0 +1,76 @@
+{
+  "slot": 400000200,
+  "blockTime": 1700000800,
+  "transaction": {
+    "signatures": [
+      "28pWvkMN4mg3fjYUckTXHMqkfvTDcwL7eJzSsLCqCNosx9PPeSWvC6n3smvasGapZtijkQKyBf4HAkhmHgC6LFpW"
+    ],
+    "message": {
+      "accountKeys": [
+        "2wZst3QqhnMtKLwjNUBwu69LMMW1xqfkBVUfs8Qeu5hP",
+        "9zHtoGfreT2JBatbGBJchyZobd7ZKnooA6suAKqg6noT",
+        "6qzTgLnkiqo3avrZDz7Q2ZbbBq6721MHeoLMoqzevSaA",
+        "EL6NtRBaZHKxbhUsfr6whfvJwKK8MuJgyXPJZzBaycjC",
+        "DhZJDJ1JJ49eUPuTWroMeFkoMTZiCaJtGrkEwzDXTus4",
+        "45MU5HSbDVgV4KDKa4SjuoZb24rMcWBsc7dNpCncAdFR",
+        "7tjwv4VpuA5nyRXE8g897gPw1xNEuizYDUzXNtCvUYGX",
+        "9ft7af6msNzQVsQpnMT2jfgyy74njFF5ZQUxYWrRXUzz",
+        "3YyGh4hWo4E4PWwZgFG3KKH2EfZ9FLh5KJp433TFYqvN",
+        "Ep18cTdZmzCczsV5v4fRBX6MPssfUWYtdv3GoSFQtzd",
+        "AL1dnaRQm7hcjD3LCPfXP5zWKArgsNjZrU73V5PFGF9c",
+        "7Wy5Vk8CF31duNqmXtgiPT68so5fjNE8S6Jkc5KAz1xs",
+        "8e4GYrHZBAjAHwJvR39qqJAaizbQxfgwPMSacR2Hmf3e",
+        "D5SEL25yx4MbHuw4w6LUNp7GY5nJqpFwkoJGdn7WGnrJ",
+        "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "11111111111111111111111111111111",
+        "ComputeBudget111111111111111111111111111111"
+      ],
+      "instructions": [
+        {
+          "programIdIndex": 17,
+          "accounts": [],
+          "data": "FjL4FH"
+        },
+        {
+          "programIdIndex": 14,
+          "accounts": [
+            1,
+            2,
+            3,
+            4,
+            0,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13
+          ],
+          "data": "TWS27XmfvrvEyMQmk1ycNs"
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5001,
+    "computeUnitsConsumed": 200000,
+    "logMessages": [
+      "Program MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA invoke [1]",
+      "Program log: Instruction: LendingAccountLiquidate",
+      "Program MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA consumed 180000 of 200000 compute units",
+      "Program MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA success"
+    ],
+    "innerInstructions": [],
+    "preTokenBalances": [],
+    "postTokenBalances": [],
+    "loadedAddresses": {
+      "writable": [],
+      "readonly": []
+    }
+  }
+}

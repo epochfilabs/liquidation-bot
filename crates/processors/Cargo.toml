@@ -1,0 +1,24 @@
+[package]
+name = "processors"
+version = "0.1.0"
+edition = "2021"
+description = "Per-venue processors: decoded instructions → canonical liquidation events."
+
+[dependencies]
+indexer-core = { path = "../indexer-core" }
+klend-decoder = { path = "../../decoders/klend" }
+jupiter-lend-vaults-decoder = { path = "../../decoders/jupiter-lend-vaults" }
+marginfi-v2-decoder = { path = "../../decoders/marginfi-v2" }
+save-decoder = { path = "../../decoders/save" }
+
+solana-sdk = { workspace = true }
+solana-transaction-status = { workspace = true }
+anyhow = { workspace = true }
+thiserror = { workspace = true }
+tracing = { workspace = true }
+chrono = { workspace = true }
+serde_json = { workspace = true }
+bs58 = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

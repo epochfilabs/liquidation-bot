@@ -1,0 +1,33 @@
+[package]
+name = "backfill"
+version = "0.1.0"
+edition = "2021"
+description = "Historical backfill binary. Fetches blocks from RPC (Old Faithful or Triton), decodes liquidation events, writes to ClickHouse."
+
+[[bin]]
+name = "backfill"
+path = "src/main.rs"
+
+[dependencies]
+indexer-core = { path = "../indexer-core" }
+processors = { path = "../processors" }
+klend-decoder = { path = "../../decoders/klend" }
+jupiter-lend-vaults-decoder = { path = "../../decoders/jupiter-lend-vaults" }
+marginfi-v2-decoder = { path = "../../decoders/marginfi-v2" }
+save-decoder = { path = "../../decoders/save" }
+
+solana-sdk = { workspace = true }
+solana-client = { workspace = true }
+solana-transaction-status = { workspace = true }
+anyhow = { workspace = true }
+tokio = { workspace = true }
+tracing = { workspace = true }
+tracing-subscriber = { workspace = true }
+serde = { workspace = true }
+serde_json = { workspace = true }
+bs58 = { workspace = true }
+chrono = { workspace = true }
+dotenvy = { workspace = true }
+
+[dev-dependencies]
+tokio = { workspace = true }

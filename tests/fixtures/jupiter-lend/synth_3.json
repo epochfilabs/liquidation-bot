@@ -1,0 +1,106 @@
+{
+  "slot": 410000200,
+  "blockTime": 1710000800,
+  "transaction": {
+    "signatures": [
+      "5Ah5pEVTfh2z9sBcp55JS6p6D9eRqWeBNuGPGzc6uv3sTtxYg7qmXGpRnj5pY7NdNyRnHAvQAaGWZLh5NpEXsBid"
+    ],
+    "message": {
+      "accountKeys": [
+        "CgihVzmvRoQMJq4WN23SMB3dvysgGdeBhKupmiQWJE6K",
+        "2U8gVBXUsUJVsib1hLjm4hq1tNEX42M3bS2CS9MWoWLZ",
+        "8PQtrEPTvomXQnVYYbpm4gXX15HotScEBSWPQhTR8Rfd",
+        "C2yxRfPeFGykziaPMA4fvataLrHsHNS9fM9g9xzGXMr8",
+        "G2B6otNzEvBuumNY6sJaViBCTgXFXk7DobLEMqymp4fT",
+        "97iWC2X7Njd7bTMVF6WyxZd9QLARPGCYLjkKkdbmt2h",
+        "EWxji2LtXN4EwPcHBpnr4fQE3qPXBzFCJh2mbr8dpCZu",
+        "4D1MRDqWyi5r51EdSKY8h3fgcFR5ped8gZ4bujFdXSwu",
+        "3KVCMJy5PhYBNixR8EsFxrkifwSAuSuxtc7eeyXg3cgj",
+        "JCJct5yaHvuFt89D9A6Nbo26HFFDVPi9HNBCFFT9fr9J",
+        "5UoQdnDKod7Ea4xZqSv6v2UKtzMN1SDoHCGbC24Ltm7d",
+        "5jeFZW8BbPf3tQrBGtTfVwkkpPwo6uiErdHqhV3baLYz",
+        "UJBiJtNPVUWHWNyjbbV3p7Nek8bVjGTmiGJSZgqvegZ",
+        "49hJVPcKs3LbF9UCQP73NbTMvUnSjpNuYmccVtRuuN5y",
+        "2MB71PFY9Y6DEDyLt7DkPZuSvLQwWBiLP2gCqU8B2NxM",
+        "9U8NXJzz7dJccYu8CxqwSsijfLTPjciQNoFwA6FvkWWp",
+        "HUpBETXt84abAzfkmysY1uRPgQv2UEoA78KxzbQB98yQ",
+        "2SwEWNjrRiz3HeDD78PVpzGoLErG2zPiQFmiYNHnqpMP",
+        "CREoVhJaarAKmzLFeWDc5jp5sGC2PSv2a3gNGW5VTNs7",
+        "ADgWxrB3TN1YdYih5SsuJYoBZEzE4wsdsuknruDypHhB",
+        "EpBLzYhi6KZyJXiB1SH5mvRv2n6v5LGdDjdCwrYQGLMw",
+        "CXBUK5fuUdZ22WWy64BHNNzBjxYuHyfSd3XokSQPT3gH",
+        "HSjc2fVzrkd8VzPJwuFy6UUjK5tYtVvanBRjzTFAoce9",
+        "2aKAviiPuuR6QAvMAZ7izzBi2WiNijkbyyUcqtkqRZaH",
+        "Hv7pqLQXNSdBuGRbfEJoZTjugEQqoJ2pwYPCMGxv1ndt",
+        "DEV2P2XXN4XWKfqcBHPTfNpk8kewKZVV7jpcfQDcH6K7",
+        "2GGkud7yKE6xXYAMjuCtHg4rJ7UNyN9Xc1oNGYtEU4tD",
+        "56swAztvveJfTnVn8RAYE5xJfg8iM48Wa6MhZ3rdafCz",
+        "BpwvtwEv6uc1t5dAwMxrrt5M7dxVKBrrwt8dry73wHPZ",
+        "2SfSP6cLUSSq4YG2tTn5Hq7mRGwvLhtPU6AHMLGSfSYH",
+        "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi",
+        "jupeiUmn818Jg1ekPURTpr4mFo29p46vygyykFJ3wZC",
+        "jupnw4B6Eqs7ft6rxpzYLJZYSnrpRgPcr589n5Kv4oc",
+        "TokenkegQfeZyiNwAJbNbGKPFXCWuBvf9Ss623VQ5DA",
+        "11111111111111111111111111111111",
+        "ATokenGPvbdGVxr1b2hvZbsiqW5xWH25efTNsLJA8knL",
+        "ComputeBudget111111111111111111111111111111"
+      ],
+      "instructions": [
+        {
+          "programIdIndex": 30,
+          "accounts": [
+            0,
+            1,
+            2,
+            3,
+            4,
+            5,
+            6,
+            7,
+            8,
+            9,
+            10,
+            11,
+            12,
+            13,
+            14,
+            15,
+            16,
+            17,
+            18,
+            19,
+            20,
+            21,
+            22,
+            23,
+            24,
+            25,
+            26,
+            27,
+            28,
+            29
+          ],
+          "data": "HUmkQSYJ7NJ8E1ivXXSwNU5edkBQRBwkXPR4QL5x1GLMdwZqBEKdEcxtC58"
+        }
+      ]
+    }
+  },
+  "meta": {
+    "err": null,
+    "fee": 5001,
+    "computeUnitsConsumed": 300000,
+    "logMessages": [
+      "Program jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi invoke [1]",
+      "Program log: Instruction: Liquidate",
+      "Program log: LogLiquidate { col_amount: 50000, debt_amount: 25000 }",
+      "Program jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi success"
+    ],
+    "innerInstructions": [],
+    "preTokenBalances": [],
+    "postTokenBalances": [],
+    "loadedAddresses": {
+      "writable": [],
+      "readonly": []
+    }
+  }
+}
