@@ -14,6 +14,7 @@
 
 pub mod kamino;
 pub mod jupiter;
+pub mod init;
 
 use anyhow::Result;
 use solana_sdk::{

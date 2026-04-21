@@ -45,6 +45,11 @@ impl JupiterFlashLoanProvider {
     pub fn get_accounts(&self, mint: &Pubkey) -> Option<&JupiterFlashLoanAccounts> {
         self.accounts.get(mint)
     }
+
+    /// Number of mints registered.
+    pub fn mint_count(&self) -> usize {
+        self.accounts.len()
+    }
 }
 
 impl FlashLoanProvider for JupiterFlashLoanProvider {

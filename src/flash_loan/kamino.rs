@@ -56,6 +56,11 @@ impl KaminoFlashLoanProvider {
     pub fn get_reserve(&self, mint: &Pubkey) -> Option<&ReserveAccounts> {
         self.reserves.get(mint)
     }
+
+    /// Number of reserves registered.
+    pub fn reserve_count(&self) -> usize {
+        self.reserves.len()
+    }
 }
 
 impl FlashLoanProvider for KaminoFlashLoanProvider {

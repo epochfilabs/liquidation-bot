@@ -179,14 +179,16 @@ pub async fn execute_liquidation(
         let _ = sb.insert_liquidation(&db_record).await;
     }
 
-    // Sign and submit
-    let recent_blockhash = rpc.get_latest_blockhash()?;
-    let tx = Transaction::new_signed_with_payer(
-        &all_ixs,
-        Some(&liquidator_pubkey),
-        &[&liquidator_keypair],
-        recent_blockhash,
-    );
+    // Submit via Jito bundle (or fallback to standard RPC)
+    let jito_config = crate::jito::JitoConfig::from_env();
+
+    // Calculate tip from risk config (default: 5% of estimated bonus, capped)
+    let risk_config = crate::risk::RiskConfig::from_env();
+    let repay_usd_est = repay_amount as f64 / 1e6; // rough: assume 6-decimal stablecoin
+    let tip_lamports = ((repay_usd_est * risk_config.estimated_bonus_rate * 0.05) / 140.0 * 1e9) as u64;
+    let tip_lamports = tip_lamports
+        .max(crate::jito::MIN_TIP_LAMPORTS)
+        .min(risk_config.max_tip_per_tx_lamports);
 
     if let Some(sb) = supabase {
         let _ = sb.update_liquidation(&record_id, &UpdateLiquidationResult {
@@ -197,22 +199,30 @@ pub async fn execute_liquidation(
         }).await;
     }
 
-    match rpc.send_and_confirm_transaction(&tx) {
-        Ok(sig) => {
+    match crate::jito::submit_liquidation(
+        &jito_config,
+        &rpc,
+        all_ixs,
+        tip_lamports,
+        &liquidator_keypair,
+    ).await {
+        Ok(result_id) => {
             tracing::info!(
                 protocol = %params.protocol,
                 position = %params.position_pubkey,
-                signature = %sig,
+                result = %result_id,
                 flash_provider = %flash_provider_name,
-                "liquidation confirmed"
+                tip_lamports = tip_lamports,
+                "liquidation submitted"
             );
             if let Some(sb) = supabase {
                 let _ = sb.update_liquidation(&record_id, &UpdateLiquidationResult {
                     status: LiquidationStatus::Confirmed.to_string(),
                     updated_at: db::now_iso(),
-                    tx_signature: Some(sig.to_string()),
+                    tx_signature: Some(result_id),
                     error_message: None, actual_profit_usd: None,
-                    sol_fee_paid: None, slot_submitted: None, slot_confirmed: None,
+                    sol_fee_paid: Some(tip_lamports as i64),
+                    slot_submitted: None, slot_confirmed: None,
                 }).await;
             }
         }
@@ -221,7 +231,7 @@ pub async fn execute_liquidation(
                 protocol = %params.protocol,
                 position = %params.position_pubkey,
                 error = %e,
-                "liquidation tx failed"
+                "liquidation submission failed"
             );
             if let Some(sb) = supabase {
                 let _ = sb.update_liquidation(&record_id, &UpdateLiquidationResult {

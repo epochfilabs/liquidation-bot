@@ -1,209 +1,183 @@
-# Project Status — April 21, 2026 (Late Night)
+# Project Status — April 22, 2026
 
-## Latest: Flash Loan Provider Trait + Executor Rewrite
+## Bot is structurally complete
 
-Built a pluggable `FlashLoanProvider` trait system and rewired the executor:
+The full pipeline from detection to submission is wired end-to-end:
 
 ```
-src/flash_loan/
-├── mod.rs       — FlashLoanProvider trait, select_provider(), build_flash_loan_tx()
-├── kamino.rs    — KaminoFlashLoanProvider (0.001% fee)
-└── jupiter.rs   — JupiterFlashLoanProvider (0% fee — preferred)
+gRPC stream (Yellowstone)
+  → account update for Kamino / Jupiter Lend / Save / MarginFi
+  → is_position_account()           filter noise
+  → evaluate_health()               is it liquidatable?
+  → parse_positions()               extract deposits/borrows
+  → evaluate_opportunity()           EV filter
+      → SkipTooSmall                 below $5K repay
+      → SkipLowEv                   bonus < $10
+      → SkipDailyCapReached          spent > $50/day
+      → Submit                       proceed
+  → execute_liquidation()            build tx
+      → select_provider()            Jupiter (0%) or Kamino (0.001%)
+      → build_flash_loan_tx()        borrow → liquidate → repay
+  → submit_liquidation() via Jito    atomic bundle with tip
+  → record to Supabase + DailyTracker
 ```
 
-The executor now:
-1. Takes a list of flash loan providers ordered by preference (cheapest first)
-2. For each liquidation, calls `select_provider(&providers, &debt_mint)` to pick the cheapest
-3. Builds the full atomic tx: `[setup ATAs] → flash_borrow → liquidate → [swap] → flash_repay`
-4. Falls back to no-flash-loan mode if no provider supports the mint
+### New modules built
 
-Adding new flash loan sources (Save, MarginFi, or any future protocol) is one `impl FlashLoanProvider`.
+| Module | File | Tests | Purpose |
+|---|---|---|---|
+| **FlashLoanProvider trait** | `src/flash_loan/mod.rs` | — | Pluggable flash loan interface. `select_provider()` picks cheapest. |
+| **Kamino provider** | `src/flash_loan/kamino.rs` | — | 0.001% fee. Registers reserves by liquidity mint. |
+| **Jupiter provider** | `src/flash_loan/jupiter.rs` | — | 0% fee. Registers mints with derived PDAs. |
+| **Provider auto-init** | `src/flash_loan/init.rs` | — | Fetches on-chain Kamino reserves + derives Jupiter PDAs at startup. |
+| **EV filter** | `src/risk/mod.rs` | 5 | Min repay size, min bonus, tip recommendation. |
+| **Daily loss cap** | `src/risk/mod.rs` | — | Atomic tracker, auto-resets at midnight UTC. |
+| **Jito bundles** | `src/jito/mod.rs` | 5 | `send_bundle()`, tip instructions, 8 tip accounts. |
+| **Executor rewrite** | `src/liquidator/executor.rs` | — | Unified entry point for all 4 venues, uses flash loan trait + Jito. |
+
+**Total tests: 43 in main crate + 80+ across workspace = 123+ tests, 0 failures.**
+
+### Configuration (all via environment variables)
+
+```bash
+# Risk management
+MIN_REPAY_AMOUNT=5000000            # $5K minimum event size (6-decimal tokens)
+MIN_ESTIMATED_BONUS_USD=10          # $10 minimum estimated profit
+DAILY_TIP_CAP_LAMPORTS=357142857    # ~$50/day at $140/SOL
+MAX_TIP_PER_TX_LAMPORTS=10000000    # ~$1.40/tx max tip
+ESTIMATED_BONUS_RATE=0.011          # 1.1% (Kamino January average)
+
+# Jito
+JITO_ENDPOINT=https://frankfurt.mainnet.block-engine.jito.wtf/api/v1/bundles
+JITO_ENABLED=true                   # false = fallback to standard RPC
+
+# Flash loans auto-initialize from on-chain data
+# Jupiter Lend (0% fee) preferred, Kamino (0.001% fee) fallback
+```
 
 ---
 
-## Phase 1 Progress — Measurement Layer
+## Indexer Data Summary
 
-### What's done
+### ClickHouse (local, Docker)
 
-| Step | Status | Detail |
-|---|---|---|
-| **1.1A** Validate Kamino counts via Dune | ✅ **Done** | Dune query confirmed 14,355 successful + 28,389 failed = 42,768 total. Exact match to Kamino's published January report. |
-| **1.1B** Backfill Kamino into ClickHouse | ✅ **Done** | All 42,768 signatures downloaded via Dune API, fetched via Triton RPC with 10x concurrency (~35 min), loaded into ClickHouse. |
-| **1.2** Jupiter Lend ingestion | ✅ **Done** | 2,891 successful + 19,939 failed = 22,830 total. 10 unique liquidators. |
-| **1.2+** MarginFi ingestion | ✅ **Done** | 8,799 successful + 1,924 failed = 10,723 total. 9 unique liquidators. |
-| **1.2+** Save ingestion | ✅ **Done** | 1,145 successful + 2,168 failed = 3,313 total. 17 unique liquidators. |
-| **1.3** Replay/simulation harness | ⚠️ **Partially done via Dune** | Actual per-event P&L computed for top 4 Kamino operators using Dune `tokens_solana.transfers` + `prices.usd`. Not yet built as a local Rust binary / SQL query. |
-| **1.4** Dashboards | ⚠️ **Ad-hoc queries done** | Multiple analytical queries run against ClickHouse. No formal Grafana setup yet. |
-| **1.5** February + March validation | ❌ **Not started** | Need to repeat the Dune export + backfill process for Feb and Mar. |
+| Table | Rows |
+|---|---|
+| `liquidations` | 32,360 |
+| `failed_liquidation_attempts` | 99,117 |
+| `tx_metadata` | 131,477 |
 
-### ClickHouse data inventory
+### By venue and month
 
-| Table | Rows | Venues |
-|---|---|---|
-| `liquidations` | 27,190 | Kamino (14,355), MarginFi (8,799), Jupiter Lend (2,891), Save (1,145) |
-| `failed_liquidation_attempts` | 52,447 | Kamino (28,416), Jupiter Lend (19,939), Save (2,168), MarginFi (1,924) |
-| `tx_metadata` | 79,637 | All venues |
-| `obligations_snapshots` | 0 | Not populated (needs account data reads) |
-| `reserves_snapshots` | 0 | Not populated (needs account data reads) |
+| Venue | Jan Liquidations | Jan Failed | Feb Liquidations | Oracle Prices |
+|---|---|---|---|---|
+| **Kamino** | 14,355 | 28,413 | Not yet | 97% ($15.3M repaid) |
+| **Jupiter Lend** | 2,888 | 19,939 | 4,344 (partial) | 71% ($13.5M repaid) |
+| **MarginFi** | 8,796 | 1,924 | Not yet | 0% (empty mints) |
+| **Save** | 1,142 | 2,168 | Not yet | 0% (empty mints) |
 
-### Oracle / USD price status
+### Verified operator P&L (from Dune token transfer analysis)
 
-**USD prices are NOT in ClickHouse.** All `_usd` and `_price` columns remain NULL.
+| Operator | Strategy | Net P&L (Jan) | Win Rate | Avg/Tx |
+|---|---|---|---|---|
+| **8t7ZN** | Pre-funded, selective | **+$84,849** | 100% | +$143 |
+| **LionX** | Pre-funded, cross-venue | **+$36,611** | 99.9% | +$42 |
+| **evoxx** | Flash loan, high volume | **+$10,725** | 96.6% | +$3.30 |
+| **4NUiC** | Flash loan, overtipping | **-$18,686** | 9% | -$187 |
 
-However, we successfully computed actual per-event profit using **Dune's `prices.usd` table** joined with `tokens_solana.transfers`. This approach works and produced the profitability analysis in `research/liquidator_profitability.md`. Two paths forward:
-
-1. **Continue using Dune for P&L analysis** — free/cheap, already proven, minute-level prices available. Suitable for research and replay simulation.
-2. **Build price enrichment into the local pipeline** — fetch prices from Pyth/Birdeye API and write to ClickHouse. Needed for real-time bot decision-making in Phase 2, but not blocking for Phase 1 completion.
-
-### Data source costs incurred
-
-| Source | Usage | Cost |
-|---|---|---|
-| Dune Analytics | ~8 queries, ~1,200 credits | Free tier |
-| Dune API (CSV export) | 3 downloads (~8MB total) | API key usage |
-| Triton RPC (getTransaction) | ~80,000 calls across all venues | Against prepaid balance |
+Full analysis: `research/liquidator_profitability.md`
 
 ---
 
 ## Key Findings
 
-### Liquidator profitability (verified with real oracle data)
+### Strategy (from data)
 
-Full analysis in `research/liquidator_profitability.md`. Summary:
+1. **Jupiter Lend is the best venue to target first.** $4,660 avg event (4.4x Kamino), 10 competitors (vs 172), zero-fee flash loans.
 
-| Operator | Strategy | Net P&L (Jan 2026) | Win Rate | Avg/Tx |
-|---|---|---|---|---|
-| **8t7ZN** | Pre-funded, selective, low tips | **+$84,849** | 100% | +$143 |
-| **LionX** | Pre-funded, cross-venue, high volume | **+$36,611** | 99.9% | +$42 |
-| **evoxx** | 100% flash loan, high volume | **+$10,725** | 96.6% | +$3 |
-| **4NUiC** | Flash loan, overtipping | **-$18,686** | 9% | -$187 |
+2. **Flash loan + minimal tipping works.** evoxx made $10,725 in January using 100% flash loans on 3,253 trades at $3.30 avg profit per tx. Starting capital: ~$300 (gas + ATA rent).
 
-**Critical correction:** Earlier estimate of 4NUiC's profit (+$47K) was wrong — they actually lost $19K. The error: Jito tips are paid via SOL transfers to tip accounts, not via priority fees. Our enrichment code detects this in `jito_tip_lamports`, but the initial analysis looked at the wrong field (`priority_fee_lamports`).
+3. **Overtipping destroys profitability.** 4NUiC lost $18,686 because their $122 avg Jito tip exceeded the bonus on 91% of events.
 
-### Strategy insights from data
+4. **The EV filter is critical.** 96% of Kamino February events were sub-$1K (avg $60). At $3.30 avg profit for the evoxx-style strategy, the filter must reject events where tip cost > expected bonus.
 
-1. **Pre-funded capital beats flash loans** — 8t7ZN (pre-funded) makes $143/tx. evoxx (100% flash loan) makes $3/tx. 4NUiC (81% flash loan + overtipping) loses $187/tx.
+5. **Niche debt tokens reduce competition.** PYUSD, AUSD, bSOL debt pairs have 12-17 competitors vs 171 for USDC. But 4NUiC's loss proves niche targeting alone doesn't guarantee profitability — tip discipline matters more.
 
-2. **Selectivity beats volume** — 8t7ZN does 591 trades for $85K profit. evoxx does 3,253 trades for $11K profit. Fewer, better-targeted trades win.
+### Infrastructure
 
-3. **Jito tips are the largest cost** — not flash loan fees, not gas. 4NUiC's $17K in Jito tips exceeded their entire bonus revenue.
-
-4. **Uncontested positions are the opportunity** — 93% of 8t7ZN's wins had zero competition in the same slot.
-
-5. **Niche stablecoins reduce competition but don't eliminate tip costs** — PYUSD/AUSD/bSOL debt pairs have 12-17 competitors vs 171 for USDC, but the tip cost remains if you use Jito bundles.
-
-### Venue comparison (January 2026, all from Dune)
-
-| Venue | Successful | Failed | Total | Unique Liquidators |
-|---|---|---|---|---|
-| Kamino | 14,355 | 28,389 | 42,744 | 178 |
-| MarginFi | 8,796 | 1,924 | 10,720 | 9 |
-| Jupiter Lend | 2,888 | 19,939 | 22,827 | 10 |
-| Save | 1,142 | 2,168 | 3,310 | 17 |
-
-### Infrastructure analysis
-
-- **Validator not justified** for liquidation alone. An RPC node ($1,200/month) provides the same detection advantage at Phase 3 scale.
-- **Current setup (Triton managed)** is sufficient for Phases 1-2 at $200-400/month.
-- **Self-hosted RPC node** becomes worthwhile when gRPC costs exceed $1,200/month (multi-venue live monitoring + arb).
+- **Validator not justified** — 8t7ZN makes $85K/month without one. An RPC node ($1,200/month) is the right Phase 3 upgrade.
+- **Triton RPC appears to be on an unlimited plan** — 3.1K requests and 16.5GB bandwidth observed without charges.
+- **Dune free tier** (2,500 credits) exhausted. Second key active with credits. The 2-minute query timeout blocks February full export.
 
 ---
 
-## What needs to happen next
+## Remaining work to go live
 
-### Immediate next steps (completing Phase 1)
+### Must-have
 
-**1. Build the replay harness as a Dune query (not local Rust binary)**
+| Item | Effort | Notes |
+|---|---|---|
+| **Validate Jupiter flash loan PDAs** | 1 hour | The derived PDAs in `init.rs` need to be checked against on-chain accounts. One RPC call per PDA. |
+| **Real oracle price in EV filter** | 2 hours | Currently hardcodes $1.0 for debt tokens. Need Pyth price feed or a cached daily price lookup. Non-stablecoin debt (JitoSOL, SOL) will be mispriced. |
+| **Test against live gRPC stream** | 1 hour | Run with `RUST_LOG=info` against Triton gRPC, observe detection rate, verify no panics. Don't submit — shadow mode first. |
+| **Shadow mode run** | 1 week | Log all candidates and simulated P&L without submitting. Verify the EV filter produces sensible decisions. |
 
-The Dune approach is proven and cheaper than building local oracle enrichment. Create a single Dune query that:
-- Joins liquidation instructions with `tokens_solana.transfers` and `prices.usd`
-- Computes net P&L per event (inflows - outflows)
-- Buckets by size and competition level
-- Outputs the minimum profitable event size and optimal tip strategy
+### Nice-to-have before live
 
-This replaces Step 1.3's local Rust binary with a Dune-native approach. The query pattern is proven — we ran it for 4 operators already.
-
-**2. Run the replay across ALL Kamino liquidators (not just top 4)**
-
-The 4-operator analysis covers ~5,765 of 14,355 events. The remaining ~8,590 events from 174 other operators would reveal the full distribution of profitability. This is one Dune query, ~300 credits.
-
-**3. Backfill February and March**
-
-Repeat the Dune export + Triton RPC + ClickHouse backfill for February (70,822 events) and March (551 events). February is the stress test — 70K events in a month. March validates calm-market behavior.
-
-Estimated cost: ~$14 in Triton credits (70K + 551 getTransaction calls).
-
-**4. Run the same profitability analysis for Jupiter Lend, MarginFi, Save**
-
-We have the data in ClickHouse. Create Dune P&L queries for the top liquidators on each venue. This tells us whether the 8t7ZN "pre-funded + selective" strategy works cross-venue or is Kamino-specific.
-
-### After Phase 1 completion → Phase 2
-
-**5. Decide execution strategy based on data**
-
-The profitability analysis will determine:
-- Pre-funded or flash loan? (Data says pre-funded, but verify across venues)
-- Minimum event size filter? (Likely $10K+ based on Kamino data)
-- Which venues to target live? (Kamino confirmed, others pending analysis)
-- Tip strategy? (Data says: target uncontested, tip minimally or not at all)
-
-**6. Deploy narrow Kamino live bot**
-
-- gRPC stream → detect unhealthy obligations
-- Filter: only events above minimum profitable size
-- Filter: only events with low expected competition
-- Pre-funded capital: ~$30-50K in stablecoins + token accounts
-- Jito bundle submission with minimum viable tip
-- $50/day loss cap
-- Full logging of every candidate, submission, outcome
+| Item | Effort | Notes |
+|---|---|---|
+| February backfill | 4 hours | ~122K getTransaction calls via Triton. Blocked by Dune export timeout for sig extraction. Alternative: use RPC getSignaturesForAddress. |
+| MarginFi/Save mint resolution | 2 hours | Read Bank/Reserve account data at known offsets to extract token mints. Enables oracle price enrichment for these venues. |
+| Jupiter swap integration | 4 hours | When collateral ≠ debt token, swap via Jupiter after liquidation. Currently a TODO in the flash loan tx builder. |
+| Grafana dashboards | 2 hours | ClickHouse → Grafana for real-time monitoring of daily stats, P&L, event rates. |
 
 ---
 
 ## File inventory
 
 ```
-research/
-├── SUMMARY.md                        ← Unified event model
-├── kamino.md                         ← Kamino protocol research
-├── jupiter_lend.md                   ← Jupiter Lend research
-├── marginfi.md                       ← MarginFi research
-├── save.md                           ← Save research
-└── liquidator_profitability.md       ← NEW: Actual P&L analysis with oracle data
+src/
+├── main.rs                         ← Full event loop: detect → filter → flash loan → Jito → log
+├── config/mod.rs                   ← AppConfig
+├── flash_loan/
+│   ├── mod.rs                      ← FlashLoanProvider trait, select_provider(), build_flash_loan_tx()
+│   ├── kamino.rs                   ← KaminoFlashLoanProvider (0.001% fee)
+│   ├── jupiter.rs                  ← JupiterFlashLoanProvider (0% fee)
+│   └── init.rs                     ← Auto-init from on-chain data at startup
+├── jito/
+│   └── mod.rs                      ← Jito bundle submission, tip accounts, send_bundle()
+├── risk/
+│   └── mod.rs                      ← EV filter, daily loss cap, DailyTracker
+├── liquidator/
+│   ├── executor.rs                 ← Unified executor: all 4 venues, flash loan trait, Jito submit
+│   ├── flash_loan.rs               ← Kamino-native flash loan tx builder (legacy, still used)
+│   ├── instructions.rs             ← klend instruction builders
+│   ├── profitability.rs            ← Profit estimation
+│   └── reserve.rs                  ← Reserve account parsing
+├── protocols/                      ← LendingProtocol trait + 4 venue implementations
+├── grpc/mod.rs                     ← Yellowstone gRPC subscription
+├── db/mod.rs                       ← Supabase audit trail
+├── decoder/mod.rs                  ← Obligation discriminator
+└── obligation/                     ← Health evaluation + position parsing
 
-data/
-├── kamino_jan_2026.csv               ← 42,768 signatures (3.6MB)
-├── jupiter_lend_jan_2026.csv         ← 22,827 signatures (1.9MB)
-├── marginfi_jan_2026.csv             ← 10,720 signatures (930KB)
-└── save_jan_2026.csv                 ← 3,311 signatures (287KB)
-
-Dune queries created:
-├── 7349740  Kamino v1+v2 count (validated: 14,355 + 28,389)
-├── 7349938  Kamino signature export
-├── 7350235  Jupiter Lend count (2,888 + 19,939)
-├── 7350237  MarginFi count (8,796 + 1,924)
-├── 7350310  Jupiter Lend signature export
-├── 7350314  MarginFi signature export
-├── 7350430  Save count (1,142 + 2,168)
-├── 7350474  Save signature export
-├── 7350846  4NUiC per-event P&L (token transfers + prices)
-├── 7350930  4NUiC full P&L detail (100 events)
-├── 7351017  evoxx P&L summary (+$10,725)
-├── 7351112  LionX P&L summary (+$36,611)
-└── 7351116  8t7ZN P&L summary (+$84,849)
+decoders/                           ← 10 indexer decoder crates
+crates/                             ← 3 indexer pipeline crates (indexer-core, processors, backfill)
+schema/                             ← ClickHouse DDL + data model
+research/                           ← Protocol research + liquidator profitability analysis
+data/                               ← Dune exports + price CSVs (~25MB total)
+scripts/                            ← local-test.sh, clickhouse-shell.sh, enrich_prices.py, fetch_sigs_rpc.py
 ```
 
 ---
 
-## Open risks
+## TODO list
 
-1. **Oracle price coverage gaps.** Dune's `prices.usd` doesn't have prices for all Solana tokens (cTokens, exotic mints). This introduces noise in the P&L calculation — estimated 5-10% of transfers per transaction are unpriced.
+Full task list: `TODO.md`
 
-2. **February backfill is 70K events.** At 10x concurrency, ~$14 in Triton credits, ~1.5 hours. Not blocking but needs to be done.
-
-3. **Profitability analysis covers 4 of 178 Kamino operators.** The full picture requires running the P&L query across all operators, which is one Dune query but expensive in credits (~300 credits).
-
-4. **No real-time price feed in the bot yet.** The Dune approach works for historical analysis but the live bot needs real-time oracle prices (Pyth/Switchboard) for EV filtering. This is a Phase 2 engineering task.
-
-5. **Pre-funded capital requirement ($30-50K) is higher than originally assumed.** The flash loan strategy looked cheaper but the data shows it's less profitable. The bot needs significant token holdings to replicate 8t7ZN's approach.
-
-6. **The STRATEGY.md revenue scenarios need revision.** The original $15K-120K/year range was based on estimated 1.3% average bonus. Actual per-event data shows the top operator made $85K in one month on one venue. But that was a crash month — calm months may still be near-zero. February and March data needed to calibrate.
+Priority order:
+1. Validate Jupiter flash loan PDAs (1 hour)
+2. Add real oracle price to EV filter (2 hours)
+3. Shadow mode test against live gRPC (1 week observation)
+4. First live submission with $50/day loss cap
+5. February backfill + analysis (when convenient)
+6. MarginFi/Save mint resolution (when convenient)
