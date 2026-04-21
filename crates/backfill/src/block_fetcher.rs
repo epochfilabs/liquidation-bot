@@ -28,7 +28,12 @@ pub async fn run_backfill(
         CommitmentConfig::confirmed(),
     );
 
-    let end_slot = match config.end_slot {
+    let (start_slot, end_slot_opt) = match &config.mode {
+        crate::config::BackfillMode::SlotRange { start_slot, end_slot } => (*start_slot, *end_slot),
+        _ => return Ok(()), // Not slot range mode
+    };
+
+    let end_slot = match end_slot_opt {
         Some(s) => s,
         None => {
             let slot = rpc.get_slot().context("failed to get current slot")?;
@@ -36,8 +41,6 @@ pub async fn run_backfill(
             slot
         }
     };
-
-    let start_slot = config.start_slot;
     let total_slots = end_slot.saturating_sub(start_slot);
     tracing::info!(
         start = start_slot,

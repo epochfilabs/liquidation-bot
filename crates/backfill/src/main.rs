@@ -1,33 +1,34 @@
-//! Backfill binary: fetches blocks from RPC (Old Faithful or Triton),
-//! decodes liquidation events across all four venues, writes to ClickHouse.
+//! Backfill binary: fetches historical liquidation transactions and writes
+//! decoded events to ClickHouse.
 //!
-//! Architecture:
-//!   1. Block fetcher (RPC) → channel → processor → channel → ClickHouse writer
-//!   2. Per-venue filter at the instruction level (not block level)
-//!   3. Idempotent: ReplacingMergeTree deduplicates on (tx_signature, ix_index)
-//!   4. Resumable: _indexer_progress tracks last slot per venue
+//! Two modes:
 //!
-//! Usage:
-//!   SOLANA_RPC_URL=<old-faithful-or-triton> \
-//!   CLICKHOUSE_URL=http://localhost:8123 \
-//!   cargo run -p backfill -- --start-slot <N> --end-slot <M>
+//! 1. **Signature file mode** (recommended, cheap):
+//!    Export liquidation signatures from Dune Analytics, then fetch only those txs.
+//!    ~14,355 getTransaction calls for one month of Kamino ≈ ~$7 in RPC credits.
 //!
-//! For Old Faithful backfill:
-//!   1. Download epoch CAR: curl -O https://files.old-faithful.net/<epoch>/epoch-<epoch>.car
-//!   2. Run local RPC: faithful-cli rpc epoch-<epoch>.car --listen :8899
-//!   3. Point SOLANA_RPC_URL=http://localhost:8899
+//!    BACKFILL_SIGNATURES_FILE=sigs.txt cargo run -p backfill
+//!
+//! 2. **Slot range mode** (expensive, scans every block):
+//!    Iterates through every slot in a range. Most blocks have zero liquidations.
+//!    Use only for small ranges or when you need complete coverage.
+//!
+//!    BACKFILL_START_SLOT=414544140 BACKFILL_END_SLOT=414544150 cargo run -p backfill
 
 mod block_fetcher;
 mod config;
+mod sig_fetcher;
 mod tx_parser;
 
-use anyhow::{Context, Result};
+use anyhow::Result;
 use tokio::sync::mpsc;
 use tracing_subscriber::EnvFilter;
 
 use indexer_core::events::ProcessedTransaction;
 use indexer_core::progress::ProgressTracker;
 use indexer_core::writer;
+
+use config::BackfillMode;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -37,14 +38,17 @@ async fn main() -> Result<()> {
         .init();
 
     let cfg = config::BackfillConfig::from_env()?;
-    tracing::info!(
-        rpc_url = %cfg.rpc_url,
-        start_slot = cfg.start_slot,
-        end_slot = ?cfg.end_slot,
-        "starting backfill"
-    );
 
-    // Channel: block_fetcher → processor → writer
+    match &cfg.mode {
+        BackfillMode::SignatureFile { path } => {
+            tracing::info!(file = %path, "signature file mode");
+        }
+        BackfillMode::SlotRange { start_slot, end_slot } => {
+            tracing::info!(start = start_slot, end = ?end_slot, "slot range mode");
+        }
+    }
+
+    // Channel: fetcher → processor → writer
     let (tx_sender, tx_receiver) = mpsc::channel::<ProcessedTransaction>(1024);
 
     // Spawn the ClickHouse writer actor
@@ -63,23 +67,21 @@ async fn main() -> Result<()> {
         }
     });
 
-    // Run the block fetcher + processor pipeline
+    // Run the appropriate backfill mode
     let mut progress = ProgressTracker::new();
-    let fetch_result = block_fetcher::run_backfill(&cfg, tx_sender, &mut progress).await;
 
-    match &fetch_result {
+    let result = match &cfg.mode {
+        BackfillMode::SignatureFile { path } => {
+            sig_fetcher::run_signature_backfill(&cfg, path, tx_sender, &mut progress).await
+        }
+        BackfillMode::SlotRange { .. } => {
+            block_fetcher::run_backfill(&cfg, tx_sender, &mut progress).await
+        }
+    };
+
+    match &result {
         Ok(()) => {
             tracing::info!("backfill completed successfully");
-            for rec in progress.all_records() {
-                tracing::info!(
-                    venue = %rec.venue,
-                    last_slot = rec.last_slot,
-                    liquidations = rec.rows_liquidations,
-                    failed = rec.rows_failed,
-                    total = rec.rows_total_processed,
-                    "venue progress"
-                );
-            }
         }
         Err(e) => {
             tracing::error!(error = %e, "backfill failed");
@@ -89,5 +91,5 @@ async fn main() -> Result<()> {
     // Wait for writer to finish
     writer_handle.await?;
 
-    fetch_result
+    result
 }

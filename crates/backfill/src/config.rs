@@ -2,19 +2,32 @@
 
 use anyhow::{Context, Result};
 
+/// Backfill mode: either scan a slot range or fetch specific signatures.
+#[derive(Debug, Clone)]
+pub enum BackfillMode {
+    /// Scan blocks slot-by-slot (expensive: touches every block in range).
+    SlotRange {
+        start_slot: u64,
+        end_slot: Option<u64>,
+    },
+    /// Fetch specific transactions by signature from a file (cheap: only the txs you want).
+    /// File format: one base58 signature per line. Lines starting with # are comments.
+    /// Export from Dune, then fetch raw txs via getTransaction (~$7 per 14K sigs).
+    SignatureFile {
+        path: String,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct BackfillConfig {
-    /// Solana RPC URL (Old Faithful local or Triton remote).
+    /// Solana RPC URL (Triton).
     pub rpc_url: String,
 
-    /// Start slot for backfill.
-    pub start_slot: u64,
+    /// Backfill mode.
+    pub mode: BackfillMode,
 
-    /// End slot for backfill (None = run until latest).
-    pub end_slot: Option<u64>,
-
-    /// How many blocks to fetch per batch.
-    pub batch_size: u64,
+    /// How many concurrent RPC requests (for signature mode).
+    pub concurrency: usize,
 
     /// ClickHouse connection.
     pub clickhouse_url: String,
@@ -31,25 +44,29 @@ impl BackfillConfig {
         let rpc_url = std::env::var("SOLANA_RPC_URL")
             .context("SOLANA_RPC_URL not set")?;
 
-        let start_slot = std::env::var("BACKFILL_START_SLOT")
-            .unwrap_or_else(|_| "0".to_string())
-            .parse::<u64>()
-            .context("invalid BACKFILL_START_SLOT")?;
+        // Determine mode: signature file takes priority over slot range
+        let mode = if let Ok(path) = std::env::var("BACKFILL_SIGNATURES_FILE") {
+            BackfillMode::SignatureFile { path }
+        } else {
+            let start_slot = std::env::var("BACKFILL_START_SLOT")
+                .unwrap_or_else(|_| "0".to_string())
+                .parse::<u64>()
+                .context("invalid BACKFILL_START_SLOT")?;
+            let end_slot = std::env::var("BACKFILL_END_SLOT")
+                .ok()
+                .and_then(|s| s.parse::<u64>().ok());
+            BackfillMode::SlotRange { start_slot, end_slot }
+        };
 
-        let end_slot = std::env::var("BACKFILL_END_SLOT")
-            .ok()
-            .and_then(|s| s.parse::<u64>().ok());
-
-        let batch_size = std::env::var("BACKFILL_BATCH_SIZE")
-            .unwrap_or_else(|_| "100".to_string())
-            .parse::<u64>()
-            .unwrap_or(100);
+        let concurrency = std::env::var("BACKFILL_CONCURRENCY")
+            .unwrap_or_else(|_| "10".to_string())
+            .parse()
+            .unwrap_or(10);
 
         Ok(Self {
             rpc_url,
-            start_slot,
-            end_slot,
-            batch_size,
+            mode,
+            concurrency,
             clickhouse_url: std::env::var("CLICKHOUSE_URL")
                 .unwrap_or_else(|_| "http://localhost:8123".to_string()),
             clickhouse_database: std::env::var("CLICKHOUSE_DATABASE")

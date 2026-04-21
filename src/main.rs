@@ -1,6 +1,7 @@
 mod config;
 mod db;
 mod decoder;
+pub mod flash_loan;
 mod grpc;
 mod liquidator;
 mod obligation;
@@ -61,6 +62,26 @@ async fn main() -> Result<()> {
         protocol_handlers.keys().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
     );
 
+    // Initialize flash loan providers (cheapest first)
+    // Jupiter Lend: 0% fee — preferred when available
+    // Kamino: 0.001% fee — deepest liquidity, fallback
+    //
+    // Providers need to be populated with reserve/mint data before they can
+    // be used. Call provider.add_mint() / provider.add_reserve() after
+    // fetching on-chain account data for the tokens you want to liquidate.
+    let flash_providers: Vec<Box<dyn flash_loan::FlashLoanProvider>> = vec![
+        Box::new(flash_loan::jupiter::JupiterFlashLoanProvider::new()),
+        Box::new(flash_loan::kamino::KaminoFlashLoanProvider::new(
+            &cfg.kamino_market_pubkey().unwrap_or_default(),
+        )),
+    ];
+
+    tracing::info!(
+        "initialized {} flash loan providers: {}",
+        flash_providers.len(),
+        flash_providers.iter().map(|p| p.kind().to_string()).collect::<Vec<_>>().join(", ")
+    );
+
     let mut stream = grpc::subscribe_all_protocols(&cfg).await?;
 
     while let Some(update) = stream.recv().await {
@@ -113,9 +134,10 @@ async fn main() -> Result<()> {
                     positions,
                 };
 
-                if let Err(e) = liquidator::executor::execute_cross_protocol(
+                if let Err(e) = liquidator::executor::execute_liquidation(
                     &cfg,
                     &params,
+                    &flash_providers,
                     supabase.as_ref(),
                 ).await {
                     tracing::error!(
