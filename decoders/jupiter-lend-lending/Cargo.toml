@@ -1,9 +1,10 @@
 [package]
 name = "jupiter-lend-lending-decoder"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Jupiter Lend lending program decoder stub. CPI decoding for liquidation indexer."
 
 [dependencies]
 solana-sdk = { workspace = true }
 thiserror = { workspace = true }
+

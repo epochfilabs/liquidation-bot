@@ -23,6 +23,7 @@ pub struct SupabaseClient {
 /// Status of a liquidation attempt.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
+#[non_exhaustive]
 pub enum LiquidationStatus {
     Pending,
     Submitted,
@@ -112,10 +113,10 @@ pub struct DailyPnl {
 }
 
 impl SupabaseClient {
-    /// Create a new Supabase client from config.
+    /// Create a new Supabase client from config. Returns `Ok(None)` when no
+    /// Supabase credentials are configured.
     pub fn new(config: &AppConfig) -> Result<Option<Self>> {
-        let (Some(url), Some(key)) = (&config.supabase_url, &config.supabase_service_role_key)
-        else {
+        let Some(supabase) = &config.supabase else {
             return Ok(None);
         };
 
@@ -126,8 +127,8 @@ impl SupabaseClient {
 
         Ok(Some(Self {
             client,
-            base_url: url.trim_end_matches('/').to_string(),
-            api_key: key.clone(),
+            base_url: supabase.url.trim_end_matches('/').to_string(),
+            api_key: supabase.service_role_key.clone(),
         }))
     }
 
@@ -140,7 +141,7 @@ impl SupabaseClient {
     pub async fn insert_liquidation(&self, record: &NewLiquidationRecord) -> Result<String> {
         let resp = self
             .client
-            .post(&self.rest_url("liquidation_attempts"))
+            .post(self.rest_url("liquidation_attempts"))
             .header("apikey", &self.api_key)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .header("Content-Type", "application/json")
@@ -196,7 +197,7 @@ impl SupabaseClient {
     pub async fn get_roi_summary(&self) -> Result<RoiSummary> {
         let resp = self
             .client
-            .get(&self.rest_url("liquidation_roi_summary"))
+            .get(self.rest_url("liquidation_roi_summary"))
             .header("apikey", &self.api_key)
             .header("Authorization", format!("Bearer {}", self.api_key))
             .send()

@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr, dead_code, unused_variables)]
+
 //! Strict validation test: processes real mainnet liquidation fixtures through
 //! the full pipeline and asserts that NO fields are null/invalid when they
 //! shouldn't be.

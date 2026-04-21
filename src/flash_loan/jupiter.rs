@@ -7,19 +7,17 @@
 //! that flashloan_payback exists in the same transaction as flashloan_borrow.
 
 use anyhow::{Context, Result};
-use solana_sdk::{
-    pubkey::Pubkey,
-    instruction::Instruction,
-};
+use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
 
-use crate::protocols::jupiter_lend_instructions::{self, JupiterFlashLoanAccounts};
+use crate::protocols::jupiter_lend::instructions::{self as jupiter_lend_instructions, JupiterFlashLoanAccounts};
 use super::{FeeRate, FlashLoanInstructions, FlashLoanProvider, FlashLoanProviderKind};
 
 /// Jupiter Lend flash loan provider.
 ///
 /// Zero fees. Requires knowing the flash loan accounts for each mint
 /// (flashloan_admin, reserves, rate_model, etc.). Call `add_mint` to register.
+#[derive(Debug, Default)]
 pub struct JupiterFlashLoanProvider {
     /// Flash loan accounts keyed by token mint.
     accounts: HashMap<Pubkey, JupiterFlashLoanAccounts>,
@@ -27,9 +25,7 @@ pub struct JupiterFlashLoanProvider {
 
 impl JupiterFlashLoanProvider {
     pub fn new() -> Self {
-        Self {
-            accounts: HashMap::new(),
-        }
+        Self::default()
     }
 
     /// Register a mint for flash loan usage.

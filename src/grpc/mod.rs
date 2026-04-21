@@ -79,34 +79,30 @@ async fn run_subscription(
     use tokio_stream::StreamExt;
     while let Some(msg_result) = stream.next().await {
         let msg = msg_result?;
-        if let Some(update) = msg.update_oneof {
-            use yellowstone_grpc_proto::geyser::subscribe_update::UpdateOneof;
-            if let UpdateOneof::Account(account_update) = update {
-                if let Some(account_info) = account_update.account {
-                    let pubkey_bytes: [u8; 32] = account_info
-                        .pubkey
-                        .try_into()
-                        .unwrap_or([0u8; 32]);
-                    let pubkey = Pubkey::new_from_array(pubkey_bytes);
+        use yellowstone_grpc_proto::geyser::subscribe_update::UpdateOneof;
+        if let Some(UpdateOneof::Account(account_update)) = msg.update_oneof
+            && let Some(account_info) = account_update.account
+        {
+            let Ok(pubkey_bytes): Result<[u8; 32], _> = account_info.pubkey.try_into() else {
+                tracing::warn!("gRPC update with invalid pubkey length — skipping");
+                continue;
+            };
+            let Ok(owner_bytes): Result<[u8; 32], _> = account_info.owner.try_into() else {
+                tracing::warn!("gRPC update with invalid owner length — skipping");
+                continue;
+            };
+            let pubkey = Pubkey::new_from_array(pubkey_bytes);
+            let owner_program = Pubkey::new_from_array(owner_bytes);
 
-                    let owner_bytes: [u8; 32] = account_info
-                        .owner
-                        .try_into()
-                        .unwrap_or([0u8; 32]);
-                    let owner_program = Pubkey::new_from_array(owner_bytes);
-
-                    // Identify which protocol this account belongs to
-                    if let Some(protocol) = protocols::identify_protocol(&owner_program) {
-                        let _ = tx
-                            .send(PositionUpdate::AccountData {
-                                pubkey,
-                                owner_program,
-                                protocol,
-                                data: account_info.data,
-                            })
-                            .await;
-                    }
-                }
+            if let Some(protocol) = protocols::identify_protocol(&owner_program) {
+                let _ = tx
+                    .send(PositionUpdate::AccountData {
+                        pubkey,
+                        owner_program,
+                        protocol,
+                        data: account_info.data,
+                    })
+                    .await;
             }
         }
     }

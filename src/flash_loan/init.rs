@@ -9,9 +9,9 @@ use solana_sdk::pubkey::Pubkey;
 use std::str::FromStr;
 
 use crate::config::AppConfig;
-use crate::liquidator::reserve;
 use crate::protocols::jupiter_lend;
-use crate::protocols::jupiter_lend_instructions::JupiterFlashLoanAccounts;
+use crate::protocols::jupiter_lend::instructions::JupiterFlashLoanAccounts;
+use crate::protocols::kamino::reserve;
 
 use super::kamino::KaminoFlashLoanProvider;
 use super::jupiter::JupiterFlashLoanProvider;
@@ -78,7 +78,7 @@ fn initialize_kamino(
     config: &AppConfig,
     rpc: &RpcClient,
 ) -> Result<KaminoFlashLoanProvider> {
-    let market = config.kamino_market_pubkey()?;
+    let market = config.kamino_market;
     let mut provider = KaminoFlashLoanProvider::new(&market);
 
     for reserve_addr in KAMINO_RESERVES {
@@ -112,11 +112,11 @@ fn initialize_kamino(
 }
 
 /// Initialize Jupiter Lend flash loan provider by deriving PDAs.
-fn initialize_jupiter(rpc: &RpcClient) -> Result<JupiterFlashLoanProvider> {
+fn initialize_jupiter(_rpc: &RpcClient) -> Result<JupiterFlashLoanProvider> {
     let mut provider = JupiterFlashLoanProvider::new();
 
-    let flash_program: Pubkey = jupiter_lend::FLASH_LOAN_PROGRAM_ID.parse().unwrap();
-    let lending_program: Pubkey = jupiter_lend::LENDING_PROGRAM_ID.parse().unwrap();
+    let flash_program: Pubkey = jupiter_lend::FLASH_LOAN_PROGRAM_ID;
+    let lending_program: Pubkey = jupiter_lend::LENDING_PROGRAM_ID;
 
     // Derive the flash loan admin PDA
     let (flashloan_admin, _) = Pubkey::find_program_address(

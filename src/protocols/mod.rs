@@ -1,25 +1,21 @@
-//! Multi-protocol support for flash loan liquidations.
+//! Multi-protocol support for flash-loan liquidations.
 //!
-//! Each lending protocol implements the `LendingProtocol` trait, providing:
-//! - Account discriminator detection
-//! - Health evaluation from raw account data
-//! - Position parsing (deposits/borrows)
-//! - Flash loan liquidation transaction building
+//! Every lending protocol we support implements the [`LendingProtocol`] trait:
+//! detecting position accounts from raw bytes, evaluating health, parsing
+//! positions, and building the protocol-specific liquidation instruction.
+//! [`Registry`] is the composition-root container that `main` uses to dispatch
+//! gRPC updates to the right handler.
 
+pub mod jupiter_lend;
 pub mod kamino;
 pub mod marginfi;
 pub mod save;
-pub mod jupiter_lend;
-pub mod jupiter_lend_instructions;
-pub mod save_instructions;
-pub mod marginfi_bank;
-pub mod marginfi_instructions;
 
 use anyhow::Result;
-use solana_sdk::{
-    instruction::Instruction,
-    pubkey::Pubkey,
-};
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::{instruction::Instruction, pubkey::Pubkey};
+
+use crate::config::AppConfig;
 
 /// Common health result across all protocols.
 #[derive(Debug, Clone)]
@@ -49,7 +45,7 @@ pub struct BorrowPosition {
     pub market_value_usd: f64,
 }
 
-/// Parsed positions from a protocol's obligation/account.
+/// Parsed positions from a protocol's obligation/position account.
 #[derive(Debug, Clone)]
 pub struct Positions {
     pub deposits: Vec<DepositPosition>,
@@ -58,29 +54,32 @@ pub struct Positions {
     pub owner: Pubkey,
 }
 
-/// Instructions for a flash loan liquidation.
+/// Context passed to [`LendingProtocol::build_liquidate_ix`] and the executor.
 #[derive(Debug)]
-pub struct FlashLoanLiquidationIxs {
-    /// ATA creation instructions (if needed).
-    pub setup_ixs: Vec<Instruction>,
-    /// Flash borrow instruction.
-    pub flash_borrow_ix: Instruction,
-    /// Liquidation instruction.
-    pub liquidate_ix: Instruction,
-    /// Flash repay instruction.
-    pub flash_repay_ix: Instruction,
-    /// The index of flash_borrow within the final transaction
-    /// (setup_ixs.len()), needed by some protocols for introspection.
-    pub borrow_ix_index: u8,
+pub struct LiquidationParams {
+    pub protocol: ProtocolKind,
+    pub position_pubkey: Pubkey,
+    pub health: HealthResult,
+    pub positions: Positions,
 }
 
 /// Identifies which protocol an account belongs to.
+///
+/// Declared `#[non_exhaustive]` so adding a variant isn't a breaking change
+/// for downstream match arms. Variant order is load-bearing: it is used as
+/// a usize index into [`Registry`].
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+#[non_exhaustive]
 pub enum ProtocolKind {
-    Kamino,
-    Save,
-    MarginFi,
-    JupiterLend,
+    Kamino = 0,
+    Save = 1,
+    MarginFi = 2,
+    JupiterLend = 3,
+}
+
+impl ProtocolKind {
+    /// Number of supported protocols. Must match the number of declared variants.
+    pub const COUNT: usize = 4;
 }
 
 impl std::fmt::Display for ProtocolKind {
@@ -94,45 +93,22 @@ impl std::fmt::Display for ProtocolKind {
     }
 }
 
-/// All known lending protocol program IDs.
-pub fn protocol_program_ids() -> Vec<(ProtocolKind, Pubkey)> {
-    vec![
-        (
-            ProtocolKind::Kamino,
-            "KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD"
-                .parse()
-                .unwrap(),
-        ),
-        (
-            ProtocolKind::Save,
-            "SLendK7ySfcEzyaFqy93gDnD3RtrpXJcnRwb6zFHJSh"
-                .parse()
-                .unwrap(),
-        ),
-        (
-            ProtocolKind::MarginFi,
-            "MFv2hWf31Z9kbCa1snEPYctwafyhdvnV7FZnsebVacA"
-                .parse()
-                .unwrap(),
-        ),
-        (
-            ProtocolKind::JupiterLend,
-            // Jupiter Lend Vaults program (handles liquidation)
-            "jupr81YtYssSyPt8jbnGuiWon5f6x9TcDEFxYe3Bdzi"
-                .parse()
-                .unwrap(),
-        ),
+/// Mainnet program ID for every supported lending protocol.
+pub fn protocol_program_ids() -> [(ProtocolKind, Pubkey); ProtocolKind::COUNT] {
+    [
+        (ProtocolKind::Kamino, kamino::PROGRAM_ID),
+        (ProtocolKind::Save, save::PROGRAM_ID),
+        (ProtocolKind::MarginFi, marginfi::PROGRAM_ID),
+        (ProtocolKind::JupiterLend, jupiter_lend::PROGRAM_ID),
     ]
 }
 
 /// Identify which protocol owns an account by its owner program.
 pub fn identify_protocol(owner_program: &Pubkey) -> Option<ProtocolKind> {
-    for (kind, program_id) in protocol_program_ids() {
-        if owner_program == &program_id {
-            return Some(kind);
-        }
-    }
-    None
+    protocol_program_ids()
+        .into_iter()
+        .find(|(_, pid)| pid == owner_program)
+        .map(|(kind, _)| kind)
 }
 
 /// Trait that each lending protocol implements.
@@ -143,7 +119,7 @@ pub trait LendingProtocol: Send + Sync {
     /// Program ID for this protocol.
     fn program_id(&self) -> Pubkey;
 
-    /// Check if raw account data is an obligation/position account for this protocol.
+    /// Check if raw account data is a position/obligation account for this protocol.
     fn is_position_account(&self, data: &[u8]) -> bool;
 
     /// Evaluate the health of a position from raw account data.
@@ -151,4 +127,55 @@ pub trait LendingProtocol: Send + Sync {
 
     /// Parse deposit/borrow positions from raw account data.
     fn parse_positions(&self, data: &[u8]) -> Result<Positions>;
+
+    /// Convert a borrow's scaled-fraction `amount_sf` into flash-loan token units.
+    /// Each protocol uses a different fixed-point scheme (Kamino 2^60, Save 10^18,
+    /// Jupiter/MarginFi native units).
+    fn flash_loan_amount(&self, borrow: &BorrowPosition) -> u64;
+
+    /// Build the protocol-specific liquidation instruction. Allowed to make
+    /// blocking RPC calls to fetch reserves, banks, or vaults.
+    fn build_liquidate_ix(
+        &self,
+        rpc: &RpcClient,
+        cfg: &AppConfig,
+        params: &LiquidationParams,
+        liquidator: &Pubkey,
+    ) -> Result<Instruction>;
+}
+
+/// Composition-root registry that owns one handler per [`ProtocolKind`].
+///
+/// Dispatch is a single array index by `kind as usize` — no hash lookup.
+pub struct Registry {
+    handlers: [Box<dyn LendingProtocol>; ProtocolKind::COUNT],
+}
+
+impl Registry {
+    pub fn new() -> Self {
+        Self {
+            handlers: [
+                Box::new(kamino::KaminoProtocol::new()),
+                Box::new(save::SaveProtocol::new()),
+                Box::new(marginfi::MarginFiProtocol::new()),
+                Box::new(jupiter_lend::JupiterLendProtocol::new()),
+            ],
+        }
+    }
+
+    /// Dispatch to the handler for `kind`.
+    pub fn get(&self, kind: ProtocolKind) -> &dyn LendingProtocol {
+        &*self.handlers[kind as usize]
+    }
+
+    /// Iterate every registered handler (used for logging, diagnostics).
+    pub fn iter(&self) -> impl Iterator<Item = &dyn LendingProtocol> + '_ {
+        self.handlers.iter().map(|h| h.as_ref())
+    }
+}
+
+impl Default for Registry {
+    fn default() -> Self {
+        Self::new()
+    }
 }

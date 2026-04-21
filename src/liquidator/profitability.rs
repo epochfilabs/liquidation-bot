@@ -3,7 +3,7 @@
 //! Calculates whether a liquidation is worth executing by estimating:
 //!   profit = (collateral_value × (1 + liquidation_bonus)) - repay_amount - flash_loan_fee - tx_cost
 
-use crate::liquidator::reserve::ReserveData;
+use crate::protocols::kamino::reserve::ReserveData;
 
 /// Scale factor for klend's u128 scaled fractions (2^60).
 const SF_SHIFT: u128 = 1u128 << 60;
@@ -96,7 +96,7 @@ pub fn estimate_profit(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::liquidator::instructions::ReserveAccounts;
+    use crate::protocols::kamino::instructions::ReserveAccounts;
     use solana_sdk::pubkey::Pubkey;
 
     fn make_reserve(

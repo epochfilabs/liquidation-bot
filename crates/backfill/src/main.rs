@@ -1,3 +1,7 @@
+// CLI tool: using `println!`/`eprintln!` is intentional for user-facing
+// progress output. `tracing` is still used for structured events.
+#![allow(clippy::print_stdout, clippy::print_stderr)]
+
 //! Backfill binary: fetches historical liquidation transactions and writes
 //! decoded events to ClickHouse.
 //!

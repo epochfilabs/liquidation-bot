@@ -1,17 +1,15 @@
-/// Kamino Lend account decoder.
-///
-/// We decode obligation and reserve accounts directly from raw bytes
-/// using known struct offsets from the klend program source.
-///
-/// The `carbon-kamino-lending-decoder` crate can be integrated later
-/// once dependency versions stabilize. For now, raw deserialization
-/// gives us full control and zero version-conflict risk.
+//! Kamino Lend account discriminator checks.
+//!
+//! We decode obligation accounts directly from raw bytes using known struct
+//! offsets from the klend program source. The `carbon-kamino-lending-decoder`
+//! crate can be integrated later once dependency versions stabilize — raw
+//! deserialization gives us full control and zero version-conflict risk.
 
-use sha2::{Sha256, Digest};
+use sha2::{Digest, Sha256};
 use std::sync::LazyLock;
 
 /// Anchor discriminator for the Obligation account.
-/// = sha256("account:Obligation")[..8]
+/// = `sha256("account:Obligation")[..8]`
 pub static OBLIGATION_DISCRIMINATOR: LazyLock<[u8; 8]> = LazyLock::new(|| {
     let hash = Sha256::digest(b"account:Obligation");
     let mut disc = [0u8; 8];

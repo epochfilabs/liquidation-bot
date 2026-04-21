@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr, dead_code, unused_variables)]
+
 //! Local integration test: processes fixture transactions through the full
 //! pipeline and writes to a local ClickHouse instance.
 //!

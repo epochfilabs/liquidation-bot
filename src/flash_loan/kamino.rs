@@ -5,20 +5,11 @@
 //! that borrow and repay instructions exist in the same transaction.
 
 use anyhow::{Context, Result};
-use solana_sdk::{
-    pubkey::Pubkey,
-    instruction::Instruction,
-};
+use solana_sdk::pubkey::Pubkey;
 use std::collections::HashMap;
-use std::str::FromStr;
-use std::sync::LazyLock;
 
-use crate::liquidator::instructions::{self, ReserveAccounts};
 use super::{FeeRate, FlashLoanInstructions, FlashLoanProvider, FlashLoanProviderKind};
-
-static KLEND_PROGRAM: LazyLock<Pubkey> = LazyLock::new(|| {
-    Pubkey::from_str("KLend2g3cP87fffoy8q1mQqGKjrxjC8boSyAYavgmjD").unwrap()
-});
+use crate::protocols::kamino::instructions::{self, KLEND_PROGRAM_ID, ReserveAccounts};
 
 /// Kamino flash loan provider.
 ///
@@ -37,7 +28,7 @@ impl KaminoFlashLoanProvider {
     pub fn new(lending_market: &Pubkey) -> Self {
         let (authority, _) = instructions::derive_lending_market_authority(
             lending_market,
-            &KLEND_PROGRAM,
+            &KLEND_PROGRAM_ID,
         );
         Self {
             lending_market: *lending_market,
@@ -88,7 +79,7 @@ impl FlashLoanProvider for KaminoFlashLoanProvider {
             .context("Kamino flash loan: mint not registered")?;
 
         let borrow_ix = instructions::flash_borrow_reserve_liquidity(
-            &KLEND_PROGRAM,
+            &KLEND_PROGRAM_ID,
             amount,
             signer,
             &self.lending_market,
@@ -98,7 +89,7 @@ impl FlashLoanProvider for KaminoFlashLoanProvider {
         );
 
         let repay_ix = instructions::flash_repay_reserve_liquidity(
-            &KLEND_PROGRAM,
+            &KLEND_PROGRAM_ID,
             amount,
             borrow_ix_index,
             signer,

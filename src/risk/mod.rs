@@ -7,74 +7,49 @@
 //! pauses the bot when the cap is reached.
 
 use std::sync::atomic::{AtomicU64, Ordering};
-use std::sync::Arc;
 
-/// Risk configuration.
-#[derive(Debug, Clone)]
+use serde::Deserialize;
+
+/// Risk / EV filter configuration.
+#[derive(Debug, Clone, Deserialize)]
+#[serde(default)]
 pub struct RiskConfig {
     /// Minimum repay amount (in token units) to consider a liquidation.
     /// Based on analysis: sub-$1K events are net negative after tips.
-    /// Default: 5,000,000 (= $5,000 for 6-decimal stablecoins like USDC)
+    /// Default: `5_000_000` (= $5,000 for 6-decimal stablecoins like USDC).
     pub min_repay_amount: u64,
 
-    /// Minimum estimated bonus in USD to submit a transaction.
-    /// Must exceed expected tip + fee costs.
-    /// Default: $10 (conservative — evoxx profits at $3.30/tx avg)
+    /// Minimum estimated bonus in USD to submit a transaction. Must exceed
+    /// expected tip + fee costs. Default: $10 (conservative).
     pub min_estimated_bonus_usd: f64,
 
     /// Maximum daily tip spend in lamports before pausing.
-    /// Default: 357,142,857 lamports = ~$50 at $140/SOL
+    /// Default: 357,142,857 lamports (≈ $50 at $140/SOL).
     pub daily_tip_cap_lamports: u64,
 
     /// Maximum Jito tip per transaction in lamports.
-    /// Default: 10,000,000 = ~$1.40 at $140/SOL
-    /// evoxx pays ~$0.03 avg. 4NUiC pays $122 avg (and loses money).
+    /// Default: 10,000,000 (≈ $1.40 at $140/SOL).
     pub max_tip_per_tx_lamports: u64,
 
-    /// Bonus rate estimate used for EV calculation.
-    /// Kamino Jan 2026 average: 0.011 (1.1%)
+    /// Bonus rate estimate used for EV calculation. Kamino Jan-2026 average: 0.011 (1.1%).
     pub estimated_bonus_rate: f64,
 }
 
 impl Default for RiskConfig {
     fn default() -> Self {
         Self {
-            min_repay_amount: 5_000_000,       // $5,000 for 6-decimal tokens
-            min_estimated_bonus_usd: 10.0,     // $10 minimum estimated profit
-            daily_tip_cap_lamports: 357_142_857, // ~$50/day at $140/SOL
-            max_tip_per_tx_lamports: 10_000_000, // ~$1.40/tx
-            estimated_bonus_rate: 0.011,        // 1.1% Kamino average
+            min_repay_amount: 5_000_000,
+            min_estimated_bonus_usd: 10.0,
+            daily_tip_cap_lamports: 357_142_857,
+            max_tip_per_tx_lamports: 10_000_000,
+            estimated_bonus_rate: 0.011,
         }
-    }
-}
-
-impl RiskConfig {
-    /// Load from environment variables with defaults.
-    pub fn from_env() -> Self {
-        let mut config = Self::default();
-
-        if let Ok(v) = std::env::var("MIN_REPAY_AMOUNT") {
-            if let Ok(n) = v.parse() { config.min_repay_amount = n; }
-        }
-        if let Ok(v) = std::env::var("MIN_ESTIMATED_BONUS_USD") {
-            if let Ok(n) = v.parse() { config.min_estimated_bonus_usd = n; }
-        }
-        if let Ok(v) = std::env::var("DAILY_TIP_CAP_LAMPORTS") {
-            if let Ok(n) = v.parse() { config.daily_tip_cap_lamports = n; }
-        }
-        if let Ok(v) = std::env::var("MAX_TIP_PER_TX_LAMPORTS") {
-            if let Ok(n) = v.parse() { config.max_tip_per_tx_lamports = n; }
-        }
-        if let Ok(v) = std::env::var("ESTIMATED_BONUS_RATE") {
-            if let Ok(n) = v.parse() { config.estimated_bonus_rate = n; }
-        }
-
-        config
     }
 }
 
 /// EV filter result.
 #[derive(Debug)]
+#[non_exhaustive]
 pub enum EvDecision {
     /// Submit this liquidation.
     Submit {
@@ -148,28 +123,41 @@ pub fn evaluate_opportunity(
     }
 }
 
-/// Tracks daily tip spend for loss cap enforcement.
+/// A snapshot of [`DailyTracker`]'s counters.
+#[derive(Debug, Clone, Copy)]
+pub struct DailyStats {
+    pub spent_lamports: u64,
+    pub successes: u64,
+    pub failures: u64,
+    pub skips: u64,
+}
+
+/// Tracks daily tip spend for loss-cap enforcement.
 ///
 /// Resets at midnight UTC. Thread-safe via atomics.
+#[derive(Debug)]
 pub struct DailyTracker {
     spent_lamports: AtomicU64,
-    current_day: AtomicU64, // unix day number
+    current_day: AtomicU64,
     successes: AtomicU64,
     failures: AtomicU64,
     skips: AtomicU64,
 }
 
+impl Default for DailyTracker {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DailyTracker {
     pub fn new() -> Self {
-        let now = std::time::SystemTime::now()
+        let secs = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let day = now / 86400;
-
+            .map_or(0, |d| d.as_secs());
         Self {
             spent_lamports: AtomicU64::new(0),
-            current_day: AtomicU64::new(day),
+            current_day: AtomicU64::new(secs / 86_400),
             successes: AtomicU64::new(0),
             failures: AtomicU64::new(0),
             skips: AtomicU64::new(0),
@@ -182,17 +170,14 @@ impl DailyTracker {
         self.spent_lamports.fetch_add(lamports, Ordering::Relaxed);
     }
 
-    /// Record a successful liquidation.
     pub fn record_success(&self) {
         self.successes.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a failed attempt.
     pub fn record_failure(&self) {
         self.failures.fetch_add(1, Ordering::Relaxed);
     }
 
-    /// Record a skipped opportunity.
     pub fn record_skip(&self) {
         self.skips.fetch_add(1, Ordering::Relaxed);
     }
@@ -203,40 +188,42 @@ impl DailyTracker {
         self.spent_lamports.load(Ordering::Relaxed)
     }
 
-    /// Daily stats.
-    pub fn stats(&self) -> (u64, u64, u64, u64) {
-        (
-            self.spent_lamports.load(Ordering::Relaxed),
-            self.successes.load(Ordering::Relaxed),
-            self.failures.load(Ordering::Relaxed),
-            self.skips.load(Ordering::Relaxed),
-        )
+    /// Snapshot the current counters.
+    pub fn stats(&self) -> DailyStats {
+        DailyStats {
+            spent_lamports: self.spent_lamports.load(Ordering::Relaxed),
+            successes: self.successes.load(Ordering::Relaxed),
+            failures: self.failures.load(Ordering::Relaxed),
+            skips: self.skips.load(Ordering::Relaxed),
+        }
     }
 
-    /// Reset if a new day has started.
+    /// Reset if a new day has started. Uses a CAS so only one caller wins the
+    /// race; the winner resets counters and logs once.
     fn maybe_reset(&self) {
-        let now = std::time::SystemTime::now()
+        let today = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)
-            .unwrap()
-            .as_secs();
-        let today = now / 86400;
+            .map_or(0, |d| d.as_secs())
+            / 86_400;
         let stored = self.current_day.load(Ordering::Relaxed);
 
-        if today > stored {
-            // New day — reset counters
-            if self.current_day.compare_exchange(stored, today, Ordering::SeqCst, Ordering::Relaxed).is_ok() {
-                let spent = self.spent_lamports.swap(0, Ordering::Relaxed);
-                let s = self.successes.swap(0, Ordering::Relaxed);
-                let f = self.failures.swap(0, Ordering::Relaxed);
-                let sk = self.skips.swap(0, Ordering::Relaxed);
-                tracing::info!(
-                    spent_lamports = spent,
-                    successes = s,
-                    failures = f,
-                    skips = sk,
-                    "daily tracker reset — new day"
-                );
-            }
+        if today > stored
+            && self
+                .current_day
+                .compare_exchange(stored, today, Ordering::SeqCst, Ordering::Relaxed)
+                .is_ok()
+        {
+            let spent = self.spent_lamports.swap(0, Ordering::Relaxed);
+            let successes = self.successes.swap(0, Ordering::Relaxed);
+            let failures = self.failures.swap(0, Ordering::Relaxed);
+            let skips = self.skips.swap(0, Ordering::Relaxed);
+            tracing::info!(
+                spent_lamports = spent,
+                successes,
+                failures,
+                skips,
+                "daily tracker reset — new day"
+            );
         }
     }
 }

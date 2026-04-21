@@ -1,21 +1,29 @@
-mod config;
-mod db;
-mod decoder;
-pub mod flash_loan;
-mod grpc;
-pub mod jito;
-mod liquidator;
-mod obligation;
-mod protocols;
-pub mod risk;
+//! Liquidation bot entry point.
+//!
+//! `main()` is the composition root: it loads config, initializes the protocol
+//! registry, flash-loan providers, Supabase client, and risk tracker, then
+//! runs the gRPC event loop. All work happens inside [`run`].
 
-use std::collections::HashMap;
 use std::sync::Arc;
 
 use anyhow::Result;
+use liquidation_bot::{
+    config::AppConfig,
+    db::SupabaseClient,
+    flash_loan::{self, FlashLoanProvider},
+    grpc::{self, PositionUpdate},
+    liquidator,
+    protocols::{LiquidationParams, ProtocolKind, Registry},
+    risk::{self, DailyTracker, EvDecision},
+};
+use solana_client::rpc_client::RpcClient;
+use solana_sdk::commitment_config::CommitmentConfig;
 use tracing_subscriber::EnvFilter;
 
-use protocols::{LendingProtocol, ProtocolKind};
+/// Approximate SOL price used when converting a lamport tip back to USD for
+/// logging. The bot's EV math is quoted in USD, but Jito tips are lamports —
+/// display conversion only, not risk-sensitive.
+const SOL_PRICE_USD_DISPLAY: f64 = 140.0;
 
 #[tokio::main]
 async fn main() -> Result<()> {
@@ -25,11 +33,15 @@ async fn main() -> Result<()> {
         .with_env_filter(EnvFilter::from_default_env())
         .init();
 
-    let cfg = config::AppConfig::load("config.toml")?;
-    tracing::info!("loaded config for market {}", cfg.kamino_market);
+    let config = Arc::new(AppConfig::load("config.toml")?);
+    run(config).await
+}
 
-    // --- Supabase audit trail (optional) ---
-    let supabase = match db::SupabaseClient::new(&cfg)? {
+/// Run the bot: wire up everything and drive the gRPC event loop.
+async fn run(config: Arc<AppConfig>) -> Result<()> {
+    tracing::info!("loaded config for market {}", config.kamino_market);
+
+    let supabase = match SupabaseClient::new(&config)? {
         Some(client) => {
             tracing::info!("supabase audit trail enabled");
             Some(client)
@@ -40,227 +52,238 @@ async fn main() -> Result<()> {
         }
     };
 
-    // --- Protocol handlers ---
-    let protocol_handlers: HashMap<ProtocolKind, Box<dyn LendingProtocol>> = HashMap::from([
-        (
-            ProtocolKind::Kamino,
-            Box::new(protocols::kamino::KaminoProtocol::new()) as Box<dyn LendingProtocol>,
-        ),
-        (
-            ProtocolKind::Save,
-            Box::new(protocols::save::SaveProtocol::new()) as Box<dyn LendingProtocol>,
-        ),
-        (
-            ProtocolKind::MarginFi,
-            Box::new(protocols::marginfi::MarginFiProtocol::new()) as Box<dyn LendingProtocol>,
-        ),
-        (
-            ProtocolKind::JupiterLend,
-            Box::new(protocols::jupiter_lend::JupiterLendProtocol::new())
-                as Box<dyn LendingProtocol>,
-        ),
-    ]);
-
+    let registry = Registry::new();
     tracing::info!(
+        protocols = ProtocolKind::COUNT,
         "initialized {} protocols: {}",
-        protocol_handlers.len(),
-        protocol_handlers.keys().map(|k| k.to_string()).collect::<Vec<_>>().join(", ")
+        ProtocolKind::COUNT,
+        registry
+            .iter()
+            .map(|h| h.kind().to_string())
+            .collect::<Vec<_>>()
+            .join(", ")
     );
 
-    // --- Flash loan providers (cheapest first) ---
-    let rpc = solana_client::rpc_client::RpcClient::new_with_commitment(
-        cfg.rpc_url.clone(),
-        solana_sdk::commitment_config::CommitmentConfig::confirmed(),
-    );
-    let flash_providers = flash_loan::init::initialize_providers(&cfg, &rpc)?;
+    let rpc = RpcClient::new_with_commitment(config.rpc_url.clone(), CommitmentConfig::confirmed());
+    let flash_providers = flash_loan::init::initialize_providers(&config, &rpc)?;
 
-    // --- Risk management ---
-    let risk_config = risk::RiskConfig::from_env();
-    let daily_tracker = Arc::new(risk::DailyTracker::new());
     tracing::info!(
-        min_repay = risk_config.min_repay_amount,
-        min_bonus_usd = risk_config.min_estimated_bonus_usd,
-        daily_cap_lamports = risk_config.daily_tip_cap_lamports,
-        max_tip_per_tx = risk_config.max_tip_per_tx_lamports,
-        bonus_rate = risk_config.estimated_bonus_rate,
+        min_repay = config.risk.min_repay_amount,
+        min_bonus_usd = config.risk.min_estimated_bonus_usd,
+        daily_cap_lamports = config.risk.daily_tip_cap_lamports,
+        max_tip_per_tx = config.risk.max_tip_per_tx_lamports,
+        bonus_rate = config.risk.estimated_bonus_rate,
         "risk config loaded"
     );
-
-    // --- Jito bundle submission ---
-    let jito_config = jito::JitoConfig::from_env();
     tracing::info!(
-        endpoint = %jito_config.endpoint,
-        enabled = jito_config.enabled,
+        endpoint = %config.jito.endpoint,
+        enabled = config.jito.enabled,
         "jito config loaded"
     );
 
-    // --- gRPC stream ---
-    let mut stream = grpc::subscribe_all_protocols(&cfg).await?;
+    let daily_tracker = Arc::new(DailyTracker::new());
+
+    let mut stream = grpc::subscribe_all_protocols(&config).await?;
 
     tracing::info!("entering event loop — listening for liquidatable positions");
 
     while let Some(update) = stream.recv().await {
-        match update {
-            grpc::PositionUpdate::AccountData {
-                pubkey,
-                protocol,
-                data,
-                ..
-            } => {
-                let Some(handler) = protocol_handlers.get(&protocol) else {
-                    continue;
-                };
-
-                // Step 1: Is this a position account?
-                if !handler.is_position_account(&data) {
-                    continue;
-                }
-
-                // Step 2: Is it liquidatable?
-                let health = match handler.evaluate_health(&data) {
-                    Ok(h) => h,
-                    Err(_) => continue,
-                };
-
-                if !health.is_liquidatable {
-                    continue;
-                }
-
-                // Step 3: Parse positions
-                let positions = match handler.parse_positions(&data) {
-                    Ok(p) => p,
-                    Err(e) => {
-                        tracing::error!(error = %e, "failed to parse positions");
-                        continue;
-                    }
-                };
-
-                // Step 4: Find the repay amount for EV filter
-                let repay_pos = match positions.borrows.iter()
-                    .max_by(|a, b| a.market_value_usd.partial_cmp(&b.market_value_usd).unwrap())
-                {
-                    Some(p) => p,
-                    None => continue,
-                };
-
-                // Estimate repay amount in token units
-                let sf_shift: u128 = 1u128 << 60;
-                let repay_amount_raw = match protocol {
-                    ProtocolKind::Kamino => (repay_pos.amount_sf / sf_shift) as u64,
-                    ProtocolKind::Save => {
-                        let wad: u128 = 1_000_000_000_000_000_000;
-                        (repay_pos.amount_sf / wad) as u64
-                    }
-                    ProtocolKind::JupiterLend => repay_pos.amount_sf as u64,
-                    ProtocolKind::MarginFi => repay_pos.amount_sf as u64,
-                };
-
-                // Step 5: EV filter — should we submit?
-                // Use 6 decimals and $1.0 as conservative stablecoin estimate
-                // TODO: use real oracle price from Pyth for non-stablecoin debt
-                let token_decimals = 6u8;
-                let token_price_usd = 1.0;
-
-                let ev_decision = risk::evaluate_opportunity(
-                    &risk_config,
-                    repay_amount_raw,
-                    token_decimals,
-                    token_price_usd,
-                    &daily_tracker,
-                );
-
-                match &ev_decision {
-                    risk::EvDecision::Submit { estimated_bonus_usd, recommended_tip_lamports } => {
-                        tracing::warn!(
-                            protocol = %protocol,
-                            position = %pubkey,
-                            ltv = %format!("{:.4}", health.current_ltv),
-                            borrowed = %format!("${:.2}", health.borrowed_value_usd),
-                            estimated_bonus = %format!("${:.2}", estimated_bonus_usd),
-                            tip = recommended_tip_lamports,
-                            "submitting liquidation"
-                        );
-
-                        let params = liquidator::executor::LiquidationParams {
-                            protocol,
-                            position_pubkey: pubkey,
-                            health,
-                            positions,
-                        };
-
-                        // Build the liquidation instructions via executor
-                        // The executor handles flash loan wrapping internally
-                        match liquidator::executor::execute_liquidation(
-                            &cfg,
-                            &params,
-                            &flash_providers,
-                            supabase.as_ref(),
-                        ).await {
-                            Ok(()) => {
-                                daily_tracker.record_success();
-                                daily_tracker.record_tip(*recommended_tip_lamports);
-                                tracing::info!(
-                                    protocol = %protocol,
-                                    position = %pubkey,
-                                    "liquidation succeeded"
-                                );
-                            }
-                            Err(e) => {
-                                daily_tracker.record_failure();
-                                daily_tracker.record_tip(*recommended_tip_lamports);
-                                tracing::error!(
-                                    error = %e,
-                                    protocol = %protocol,
-                                    position = %pubkey,
-                                    "liquidation failed"
-                                );
-                            }
-                        }
-
-                        // Log daily stats periodically
-                        let (spent, successes, failures, skips) = daily_tracker.stats();
-                        if (successes + failures) % 10 == 0 && (successes + failures) > 0 {
-                            let sol_price = 140.0;
-                            tracing::info!(
-                                spent_usd = format!("${:.2}", spent as f64 * sol_price / 1e9),
-                                successes = successes,
-                                failures = failures,
-                                skips = skips,
-                                "daily stats"
-                            );
-                        }
-                    }
-                    risk::EvDecision::SkipTooSmall { repay_amount, min_required } => {
-                        daily_tracker.record_skip();
-                        tracing::debug!(
-                            protocol = %protocol,
-                            position = %pubkey,
-                            repay = repay_amount,
-                            min = min_required,
-                            "skipped: too small"
-                        );
-                    }
-                    risk::EvDecision::SkipLowEv { estimated_bonus_usd, min_required } => {
-                        daily_tracker.record_skip();
-                        tracing::debug!(
-                            protocol = %protocol,
-                            position = %pubkey,
-                            bonus = format!("${:.2}", estimated_bonus_usd),
-                            min = format!("${:.2}", min_required),
-                            "skipped: low EV"
-                        );
-                    }
-                    risk::EvDecision::SkipDailyCapReached { spent_today, cap } => {
-                        tracing::warn!(
-                            spent = spent_today,
-                            cap = cap,
-                            "daily loss cap reached — pausing submissions"
-                        );
-                    }
-                }
-            }
-        }
+        process_update(
+            update,
+            &registry,
+            &config,
+            &flash_providers,
+            supabase.as_ref(),
+            &daily_tracker,
+        )
+        .await;
     }
 
     Ok(())
 }
+
+async fn process_update(
+    update: PositionUpdate,
+    registry: &Registry,
+    config: &AppConfig,
+    flash_providers: &[Box<dyn FlashLoanProvider>],
+    supabase: Option<&SupabaseClient>,
+    daily_tracker: &DailyTracker,
+) {
+    let PositionUpdate::AccountData {
+        pubkey,
+        protocol,
+        data,
+        ..
+    } = update;
+
+    let handler = registry.get(protocol);
+
+    if !handler.is_position_account(&data) {
+        return;
+    }
+
+    let Ok(health) = handler.evaluate_health(&data) else {
+        return;
+    };
+    if !health.is_liquidatable {
+        return;
+    }
+
+    let positions = match handler.parse_positions(&data) {
+        Ok(p) => p,
+        Err(e) => {
+            tracing::error!(error = %e, protocol = %protocol, "failed to parse positions");
+            return;
+        }
+    };
+
+    let Some(repay_pos) = positions
+        .borrows
+        .iter()
+        .max_by(|a, b| a.market_value_usd.total_cmp(&b.market_value_usd))
+    else {
+        return;
+    };
+
+    let repay_amount_raw = handler.flash_loan_amount(repay_pos);
+
+    // EV filter — conservative stablecoin estimate for now.
+    // TODO: use a real oracle price (Pyth) for non-stablecoin debt.
+    let token_decimals = 6u8;
+    let token_price_usd = 1.0;
+
+    let ev_decision = risk::evaluate_opportunity(
+        &config.risk,
+        repay_amount_raw,
+        token_decimals,
+        token_price_usd,
+        daily_tracker,
+    );
+
+    match ev_decision {
+        EvDecision::Submit {
+            estimated_bonus_usd,
+            recommended_tip_lamports,
+        } => {
+            handle_submit(
+                protocol,
+                pubkey,
+                health,
+                positions,
+                estimated_bonus_usd,
+                recommended_tip_lamports,
+                config,
+                flash_providers,
+                supabase,
+                daily_tracker,
+            )
+            .await;
+        }
+        EvDecision::SkipTooSmall {
+            repay_amount,
+            min_required,
+        } => {
+            daily_tracker.record_skip();
+            tracing::debug!(
+                protocol = %protocol,
+                position = %pubkey,
+                repay = repay_amount,
+                min = min_required,
+                "skipped: too small"
+            );
+        }
+        EvDecision::SkipLowEv {
+            estimated_bonus_usd,
+            min_required,
+        } => {
+            daily_tracker.record_skip();
+            tracing::debug!(
+                protocol = %protocol,
+                position = %pubkey,
+                bonus = format!("${:.2}", estimated_bonus_usd),
+                min = format!("${:.2}", min_required),
+                "skipped: low EV"
+            );
+        }
+        EvDecision::SkipDailyCapReached { spent_today, cap } => {
+            tracing::warn!(
+                spent = spent_today,
+                cap,
+                "daily loss cap reached — pausing submissions"
+            );
+        }
+        // `EvDecision` is `#[non_exhaustive]`; any future variant is logged.
+        _ => tracing::warn!("unhandled EV decision variant"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn handle_submit(
+    protocol: ProtocolKind,
+    position_pubkey: solana_sdk::pubkey::Pubkey,
+    health: liquidation_bot::protocols::HealthResult,
+    positions: liquidation_bot::protocols::Positions,
+    estimated_bonus_usd: f64,
+    recommended_tip_lamports: u64,
+    config: &AppConfig,
+    flash_providers: &[Box<dyn FlashLoanProvider>],
+    supabase: Option<&SupabaseClient>,
+    daily_tracker: &DailyTracker,
+) {
+    tracing::warn!(
+        protocol = %protocol,
+        position = %position_pubkey,
+        ltv = %format!("{:.4}", health.current_ltv),
+        borrowed = %format!("${:.2}", health.borrowed_value_usd),
+        estimated_bonus = %format!("${:.2}", estimated_bonus_usd),
+        tip = recommended_tip_lamports,
+        "submitting liquidation"
+    );
+
+    let params = LiquidationParams {
+        protocol,
+        position_pubkey,
+        health,
+        positions,
+    };
+
+    let submit_result =
+        liquidator::executor::execute_liquidation(config, &params, flash_providers, supabase).await;
+
+    match submit_result {
+        Ok(()) => {
+            daily_tracker.record_success();
+            daily_tracker.record_tip(recommended_tip_lamports);
+            tracing::info!(
+                protocol = %protocol,
+                position = %position_pubkey,
+                "liquidation succeeded"
+            );
+        }
+        Err(e) => {
+            daily_tracker.record_failure();
+            daily_tracker.record_tip(recommended_tip_lamports);
+            tracing::error!(
+                error = %e,
+                protocol = %protocol,
+                position = %position_pubkey,
+                "liquidation failed"
+            );
+        }
+    }
+
+    // Periodic daily stats log — every 10 terminal events.
+    let stats = daily_tracker.stats();
+    let terminal = stats.successes + stats.failures;
+    if terminal > 0 && terminal.is_multiple_of(10) {
+        tracing::info!(
+            spent_usd = format!("${:.2}", stats.spent_lamports as f64 * SOL_PRICE_USD_DISPLAY / 1e9),
+            successes = stats.successes,
+            failures = stats.failures,
+            skips = stats.skips,
+            "daily stats"
+        );
+    }
+}
+

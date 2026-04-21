@@ -35,10 +35,26 @@ chrono = { version = "0.4", features = ["serde"] }
 clickhouse = { version = "0.13", features = ["inserter"] }
 dotenvy = "0.15"
 
+[workspace.lints.rust]
+unused_must_use = "warn"
+
+[workspace.lints.clippy]
+# Tell people which lints we care about — curated, not `pedantic` blanket.
+dbg_macro = "warn"
+print_stdout = "warn"
+print_stderr = "warn"
+redundant_clone = "warn"
+needless_pass_by_value = "warn"
+# We have unavoidable `Box<dyn Trait>` containers at composition roots.
+type_complexity = "allow"
+
 [package]
 name = "liquidation-bot"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
+
+[lints]
+workspace = true
 
 [dependencies]
 # Async runtime

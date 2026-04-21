@@ -1,3 +1,5 @@
+#![allow(clippy::print_stdout, clippy::print_stderr, dead_code, unused_variables)]
+
 //! Live validation test: fetches real obligation and reserve accounts from
 //! mainnet and validates that our byte-offset deserialization produces
 //! sensible values.
@@ -27,20 +29,6 @@ fn get_rpc() -> Option<RpcClient> {
         return None;
     }
     Some(RpcClient::new_with_commitment(url, CommitmentConfig::confirmed()))
-}
-
-fn dummy_config() -> liquidation_bot::config::AppConfig {
-    liquidation_bot::config::AppConfig {
-        rpc_url: String::new(),
-        grpc_url: String::new(),
-        grpc_token: None,
-        kamino_market: KAMINO_MAIN_MARKET.to_string(),
-        klend_program_id: KLEND_PROGRAM.to_string(),
-        liquidator_keypair_path: String::new(),
-        min_profit_lamports: 0,
-        supabase_url: None,
-        supabase_service_role_key: None,
-    }
 }
 
 #[test]
@@ -87,7 +75,7 @@ fn validate_reserve_parsing_against_live_data() {
     for (pubkey, account) in &accounts {
         let data = &account.data;
 
-        let reserve = liquidation_bot::liquidator::reserve::parse_reserve(pubkey, data);
+        let reserve = liquidation_bot::protocols::kamino::reserve::parse_reserve(pubkey, data);
         assert!(reserve.is_ok(), "reserve parse failed for {}: {:?}", pubkey, reserve.err());
         let reserve = reserve.unwrap();
 
@@ -186,7 +174,6 @@ fn validate_obligation_offsets_against_live_data() {
     println!("Fetched {} obligation accounts", accounts.len());
     assert!(!accounts.is_empty(), "no obligations found — RPC may not support getProgramAccounts");
 
-    let config = dummy_config();
     let mut tested = 0;
     let mut with_borrows = 0;
 
@@ -199,7 +186,7 @@ fn validate_obligation_offsets_against_live_data() {
         }
 
         // 1. Health evaluation should not panic
-        let health = match liquidation_bot::obligation::health::evaluate(data, &config) {
+        let health = match liquidation_bot::protocols::kamino::health::evaluate(data) {
             Ok(h) => h,
             Err(e) => {
                 eprintln!("  SKIP {}: {}", pubkey, e);
@@ -226,7 +213,7 @@ fn validate_obligation_offsets_against_live_data() {
         }
 
         // 3. Position parsing
-        let positions = liquidation_bot::obligation::positions::parse_positions(data);
+        let positions = liquidation_bot::protocols::kamino::positions::parse_positions(data);
         assert!(positions.is_ok(), "position parse failed for {}: {:?}", pubkey, positions.err());
         let positions = positions.unwrap();
 
@@ -276,7 +263,7 @@ fn validate_lending_market_parsing() {
     let market_pubkey = Pubkey::from_str(KAMINO_MAIN_MARKET).unwrap();
     let account = rpc.get_account(&market_pubkey).expect("failed to fetch lending market");
 
-    let market = liquidation_bot::liquidator::reserve::parse_lending_market(&account.data);
+    let market = liquidation_bot::protocols::kamino::reserve::parse_lending_market(&account.data);
     assert!(market.is_ok(), "lending market parse failed: {:?}", market.err());
     let market = market.unwrap();
 

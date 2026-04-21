@@ -1,7 +1,7 @@
 [package]
 name = "klend-decoder"
 version = "0.1.0"
-edition = "2021"
+edition = "2024"
 description = "Kamino Lend (klend) instruction decoder for the liquidation indexer."
 
 [dependencies]
@@ -17,3 +17,4 @@ base64 = { workspace = true }
 anyhow = { workspace = true }
 bs58 = { workspace = true }
 serde_json = { workspace = true }
+

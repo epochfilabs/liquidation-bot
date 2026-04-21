@@ -1,9 +1,8 @@
-//! Extract deposit and borrow positions from raw Obligation account data.
+//! Extract deposit and borrow positions from raw `Obligation` account data.
 //!
-//! Each obligation has up to 8 deposits and 5 borrows. We need these to
-//! determine which reserves to interact with during liquidation.
+//! Each obligation has up to 8 deposits and 5 borrows.
 
-use anyhow::{bail, Result};
+use anyhow::{Result, bail};
 use solana_sdk::pubkey::Pubkey;
 
 /// Obligation layout offsets (including 8-byte Anchor discriminator).
@@ -76,47 +75,46 @@ pub struct ObligationPositions {
 pub fn parse_positions(data: &[u8]) -> Result<ObligationPositions> {
     let min_size = BORROWS_OFFSET + BORROWS_COUNT * BORROW_SIZE;
     if data.len() < min_size {
-        bail!("obligation data too small for position parsing: {} < {}", data.len(), min_size);
+        bail!(
+            "obligation data too small for position parsing: {} < {min_size}",
+            data.len()
+        );
     }
 
     let lending_market = read_pubkey(data, LENDING_MARKET_OFFSET);
     let owner = read_pubkey(data, OWNER_OFFSET);
 
-    let mut deposits = Vec::new();
-    for i in 0..DEPOSITS_COUNT {
-        let base = DEPOSITS_OFFSET + i * DEPOSIT_SIZE;
-        let reserve = read_pubkey(data, base + DEPOSIT_RESERVE_OFFSET);
-        if reserve == Pubkey::default() {
-            continue;
-        }
-        let deposited_amount = read_u64(data, base + DEPOSIT_AMOUNT_OFFSET);
-        let market_value_sf = read_u128(data, base + DEPOSIT_MARKET_VALUE_SF_OFFSET);
-        if deposited_amount > 0 {
-            deposits.push(DepositPosition {
+    let deposits = (0..DEPOSITS_COUNT)
+        .filter_map(|i| {
+            let base = DEPOSITS_OFFSET + i * DEPOSIT_SIZE;
+            let reserve = read_pubkey(data, base + DEPOSIT_RESERVE_OFFSET);
+            let deposited_amount = read_u64(data, base + DEPOSIT_AMOUNT_OFFSET);
+            if reserve == Pubkey::default() || deposited_amount == 0 {
+                return None;
+            }
+            Some(DepositPosition {
                 reserve,
                 deposited_amount,
-                market_value_sf,
-            });
-        }
-    }
+                market_value_sf: read_u128(data, base + DEPOSIT_MARKET_VALUE_SF_OFFSET),
+            })
+        })
+        .collect();
 
-    let mut borrows = Vec::new();
-    for i in 0..BORROWS_COUNT {
-        let base = BORROWS_OFFSET + i * BORROW_SIZE;
-        let reserve = read_pubkey(data, base + BORROW_RESERVE_OFFSET);
-        if reserve == Pubkey::default() {
-            continue;
-        }
-        let borrowed_amount_sf = read_u128(data, base + BORROW_AMOUNT_SF_OFFSET);
-        let market_value_sf = read_u128(data, base + BORROW_MARKET_VALUE_SF_OFFSET);
-        if borrowed_amount_sf > 0 {
-            borrows.push(BorrowPosition {
+    let borrows = (0..BORROWS_COUNT)
+        .filter_map(|i| {
+            let base = BORROWS_OFFSET + i * BORROW_SIZE;
+            let reserve = read_pubkey(data, base + BORROW_RESERVE_OFFSET);
+            let borrowed_amount_sf = read_u128(data, base + BORROW_AMOUNT_SF_OFFSET);
+            if reserve == Pubkey::default() || borrowed_amount_sf == 0 {
+                return None;
+            }
+            Some(BorrowPosition {
                 reserve,
                 borrowed_amount_sf,
-                market_value_sf,
-            });
-        }
-    }
+                market_value_sf: read_u128(data, base + BORROW_MARKET_VALUE_SF_OFFSET),
+            })
+        })
+        .collect();
 
     Ok(ObligationPositions {
         deposits,
@@ -160,8 +158,7 @@ mod tests {
         let mut data = vec![0u8; BORROWS_OFFSET + BORROWS_COUNT * BORROW_SIZE];
 
         let reserve = Pubkey::new_unique();
-        data[DEPOSITS_OFFSET..DEPOSITS_OFFSET + 32]
-            .copy_from_slice(reserve.as_ref());
+        data[DEPOSITS_OFFSET..DEPOSITS_OFFSET + 32].copy_from_slice(reserve.as_ref());
         data[DEPOSITS_OFFSET + DEPOSIT_AMOUNT_OFFSET
             ..DEPOSITS_OFFSET + DEPOSIT_AMOUNT_OFFSET + 8]
             .copy_from_slice(&1000u64.to_le_bytes());
